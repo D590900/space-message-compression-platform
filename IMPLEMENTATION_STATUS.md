@@ -10,7 +10,7 @@ Last updated: 2026-08-22
 | M3 — neural codecs       | In progress | Eight official implementations pinned with separately verified code-license evidence; strict enabled-manifest/hash/download gates; inference remains disabled until weight terms and real pipelines are approved |
 | M4 — capsule and planner | Complete    | Canonical Rust format, exact/greedy planner, API/worker wiring, Merkle/ECC, CLI, golden/properties and a 33.7M-input parser fuzz smoke                                                                           |
 | M5 — productization      | In progress | TypeScript/Python SDKs, public CLI, signed durable webhooks, atomic quotas, protected metrics, OTLP trace propagation, live worker health and operator docs; dashboard remains                                   |
-| M6 — release             | In progress | Pinned CI/security/image/release workflows and reproducible JSON/CSV/Markdown CPU benchmarks; full release audit, public PR and tag remain                                                                       |
+| M6 — release             | In progress | Pinned CI/security/image/release workflows, reproducible JSON/CSV/Markdown CPU benchmarks, clean source/image secret+CVE audit and dependency-license inventory; public PR, remote CI and tag remain             |
 
 ## Environment audit
 
