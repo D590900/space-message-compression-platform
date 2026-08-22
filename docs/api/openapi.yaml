@@ -270,7 +270,18 @@ paths:
       operationId: listCodecs
       x-required-scope: codecs:read
       responses:
-        '200': { description: Enabled and explicitly disabled capabilities }
+        '200':
+          description: Enabled and explicitly disabled capabilities
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [total_count, data]
+                properties:
+                  total_count: { type: integer, minimum: 0 }
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/CodecCapability' }
   /v1/models:
     get:
       summary: List model manifests
@@ -278,7 +289,18 @@ paths:
       operationId: listModels
       x-required-scope: codecs:read
       responses:
-        '200': { description: Versioned model manifests }
+        '200':
+          description: Versioned model manifests
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [total_count, data]
+                properties:
+                  total_count: { type: integer, minimum: 0 }
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/ModelManifest' }
 components:
   securitySchemes:
     bearerAuth:
@@ -327,6 +349,33 @@ components:
     Scope:
       type: string
       enum: [jobs:create, jobs:read, jobs:cancel, artifacts:read, decompressions:create, capsules:plan, capsules:create, capsules:read, codecs:read, webhooks:manage, admin:benchmarks, admin:codecs]
+    CodecCapability:
+      type: object
+      required: [id, version, content_type, implementation_sha256, deterministic, enabled, capability]
+      properties:
+        id: { type: string }
+        version: { type: string }
+        content_type: { type: string, enum: [TEXT, IMAGE, AUDIO, VIDEO] }
+        implementation_sha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+        deterministic: { type: boolean }
+        enabled: { type: boolean }
+        disabled_reason: { type: [string, 'null'] }
+        capability: { type: object, additionalProperties: true }
+    ModelManifest:
+      type: object
+      required: [id, version, source_uri, code_commit, weights_sha256, config_sha256, license_code, license_weights, input_contract, decoder_image_digest, enabled]
+      properties:
+        id: { type: string }
+        version: { type: string }
+        source_uri: { type: string, format: uri }
+        code_commit: { type: string }
+        weights_sha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+        config_sha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+        license_code: { type: string }
+        license_weights: { type: string }
+        input_contract: { type: string }
+        decoder_image_digest: { type: string }
+        enabled: { type: boolean }
     PresignUpload:
       type: object
       additionalProperties: false

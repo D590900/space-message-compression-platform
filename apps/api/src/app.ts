@@ -90,6 +90,18 @@ export async function buildApp(
   const apiPrincipal = async (request: FastifyRequest, scope: ApiScope) =>
     requireApiKey(dependencies.clerk, request.headers.authorization, scope);
 
+  app.get("/v1/codecs", async (request) => {
+    await apiPrincipal(request, "codecs:read");
+    const data = await dependencies.database.listCodecCapabilities();
+    return { total_count: data.length, data };
+  });
+
+  app.get("/v1/models", async (request) => {
+    await apiPrincipal(request, "codecs:read");
+    const data = await dependencies.database.listModelManifests();
+    return { total_count: data.length, data };
+  });
+
   app.post("/v1/projects", async (request, reply) => {
     idempotencyKey(request);
     const session = await requireSession(
