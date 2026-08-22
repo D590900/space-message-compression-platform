@@ -29,6 +29,25 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build candidate image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: infra/docker/${{ matrix.image }}/Dockerfile
+          push: false
+          load: true
+          tags: smcp/${{ matrix.image }}:release-candidate
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+      - name: Scan candidate image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: smcp/${{ matrix.image }}:release-candidate
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
       - name: Build and publish
         id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
@@ -38,6 +57,7 @@ jobs:
           push: true
           provenance: mode=max
           sbom: true
+          cache-from: type=gha,scope=${{ matrix.image }}
           tags: |
             ghcr.io/${{ github.repository_owner }}/smcp-${{ matrix.image }}:${{ github.ref_name }}
             ghcr.io/${{ github.repository_owner }}/smcp-${{ matrix.image }}:latest
