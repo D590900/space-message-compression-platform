@@ -1,0 +1,17 @@
+.git
+.github
+.codegraph
+.turbo
+**/.next
+**/.venv
+**/__pycache__
+**/coverage
+**/dist
+**/node_modules
+**/*.tsbuildinfo
+target
+artifacts
+benchmark-results
+.env
+.env.*
+!.env.example

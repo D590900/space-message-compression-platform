@@ -2,6 +2,10 @@ packages:
   - apps/*
   - packages/*
 
+injectWorkspacePackages: true
+syncInjectedDepsAfterScripts:
+  - build
+
 allowBuilds:
   core-js: false
   esbuild: true
