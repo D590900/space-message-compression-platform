@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     max_video_seconds: float = Field(default=1_800, gt=0)
     max_video_pixels: int = Field(default=33_177_600, gt=0)
     max_video_frames: int = Field(default=216_000, gt=0)
+    delete_originals_after_seconds: int = Field(default=0, ge=0)
+    deletion_batch_size: int = Field(default=20, ge=1, le=100)
     # Container-internal health endpoint; Compose does not publish this port.
     worker_health_host: str = "0.0.0.0"  # noqa: S104
     worker_health_port: int = Field(default=8000, ge=1, le=65_535)

@@ -26,7 +26,7 @@ Set `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` to the collector's full HTTP trace endp
 
 ## Storage and retention
 
-Buckets must be private, encrypted and deny anonymous listing. Signed URLs default to five minutes. `DELETE_ORIGINALS_AFTER_SECONDS=0` means delete after successful verification; a positive value schedules bounded retention. Deletion preserves only content-free audit facts.
+Buckets must be private, encrypted and deny anonymous listing. Signed URLs default to five minutes. `DELETE_ORIGINALS_AFTER_SECONDS=0` means delete after successful verification; a positive value schedules bounded retention, unless the project has an explicit `original_retention_seconds` override. Multiple workers claim due deletions with `SKIP LOCKED`; S3 deletion is idempotent, failures use bounded backoff with redacted error classes, and success commits `deleted_at` plus a content-free `source.deleted` audit fact. `DELETION_BATCH_SIZE` bounds each sweep.
 
 The local MinIO service uses a Compose-only static KMS key so `AES256` SSE-S3 writes are tested end to end. That key is public development configuration and must never be reused outside the local stack. Production storage must use a managed KMS and independently controlled key rotation.
 
