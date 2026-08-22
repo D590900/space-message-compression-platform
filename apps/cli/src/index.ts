@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
+import { promisify } from "node:util";
 
 import {
   SmcpClient,
@@ -33,17 +35,53 @@ Commands:
   capsule:manifest UUID
   capsule:download UUID --output PATH
   capsule:verify --project UUID --capsule UUID
+  capsule:local:inspect PATH
+  capsule:local:verify PATH
+  capsule:extract PATH --kind KIND --output PATH
   usage --project UUID
 
 Environment:
   SMCP_API_URL   API origin (default http://localhost:3001)
   SMCP_API_KEY   required scoped API key
+  SMCP_CAPSULE_CLI   Rust capsule executable (default smcp-capsule)
 `;
+
+const execFileAsync = promisify(execFile);
 
 async function run(): Promise<void> {
   const parsed = parseArguments(process.argv.slice(2));
   if (!parsed.command || parsed.command === "help") {
     process.stdout.write(USAGE);
+    return;
+  }
+  if (
+    parsed.command.startsWith("capsule:local:") ||
+    parsed.command === "capsule:extract"
+  ) {
+    const subcommand =
+      parsed.command === "capsule:local:inspect"
+        ? "inspect"
+        : parsed.command === "capsule:local:verify"
+          ? "verify"
+          : "extract";
+    const argumentsForRust = [
+      subcommand,
+      requiredPositional(parsed.positional),
+    ];
+    if (subcommand === "extract") {
+      argumentsForRust.push(
+        "--kind",
+        requiredFlag(parsed.flags, "kind"),
+        "--output",
+        requiredFlag(parsed.flags, "output"),
+      );
+    }
+    const { stdout } = await execFileAsync(
+      process.env["SMCP_CAPSULE_CLI"] ?? "smcp-capsule",
+      argumentsForRust,
+      { maxBuffer: 1_048_576 },
+    );
+    process.stdout.write(stdout);
     return;
   }
   const apiKey = process.env["SMCP_API_KEY"];
