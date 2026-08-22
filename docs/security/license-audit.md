@@ -30,3 +30,9 @@ GitHub dependency review currently reports `pkg:pypi/psycopg-binary@3.3.4` as `G
 - Weak-copyleft dependencies require notice, unmodified redistribution and satisfaction of their source/relinking terms.
 - Unknown license metadata blocks enabling or distributing a model weight and requires manual review for application code.
 - Re-run this audit against the release tag's SBOM; lockfile review does not substitute for artifact review.
+
+## Candidate-image SBOM review
+
+The pre-v0.1.0 API, worker and capsule candidates were rebuilt from the audited worktree and emitted as SPDX 2.3 JSON. Every first-party package discovered in the images (`@smcp/api`, `@smcp/schemas` and `smcp-compression-worker`) declares `Apache-2.0`. Remaining `NOASSERTION` records are the OCI document root, the Debian distribution/root packages, a small number of Debian binary packages whose source copyright inventory is mixed, and `benchmarks`/`transport` test-fixture package manifests embedded in licensed upstream npm distributions; none is an unlicensed first-party dependency.
+
+Release CI repeats this check against the exact, single-build candidate before publication. The same SPDX files are attached to the release and bound to the published image digest with an SBOM attestation.

@@ -22,6 +22,12 @@ RUN pnpm install --offline --frozen-lockfile --force \
     && pnpm --filter @smcp/api deploy --prod /opt/smcp-api
 
 FROM node:24.8.0-bookworm-slim@sha256:cadbfafeb6baf87eaaffa40b3640209c4b7fd38cebde65059d15bc39cd636b85 AS runtime
+ARG VCS_REF=unknown
+ARG VERSION=0.0.0-dev
+LABEL org.opencontainers.image.source="https://github.com/D590900/space-message-compression-platform" \
+      org.opencontainers.image.revision="$VCS_REF" \
+      org.opencontainers.image.version="$VERSION" \
+      org.opencontainers.image.licenses="Apache-2.0"
 ENV NODE_ENV=production
 RUN apt-get update \
     && apt-get upgrade -y --no-install-recommends \
