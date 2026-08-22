@@ -9,7 +9,8 @@ from pathlib import Path
 from smcp_worker.adapters.external import (
     digest,
     executable,
-    pareto_smallest_per_codec,
+    numeric_metric,
+    pareto_frontier_per_codec,
     run,
     transform,
     version_line,
@@ -317,9 +318,13 @@ def generate_image_candidates(
             report = adapter.measure(prepared, adapter.decode(candidate))
             if report.quality_gate_passed:
                 candidates.append((candidate, report))
-    return pareto_smallest_per_codec(
+    return pareto_frontier_per_codec(
         candidates,
         codec_id=lambda candidate: candidate.codec_id,
         payload_size=lambda candidate: len(candidate.payload),
+        quality=lambda report: (
+            numeric_metric(report.metrics, "ms_ssim"),
+            numeric_metric(report.metrics, "psnr_db"),
+        ),
         stable_config=lambda candidate: repr(sorted(candidate.config.items())),
     )

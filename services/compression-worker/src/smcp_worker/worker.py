@@ -442,9 +442,11 @@ class CompressionWorker:
             connection.commit()
 
             self._transition(connection, job_id, tenant_subject, "MEASURING", "SELECTING")
-            selected_id, selected_bytes, selected_key = min(
-                persisted, key=lambda item: (item[1], item[0])
-            )
+            selected = self._select_candidate(persisted, job["target_bytes"])
+            if selected is None:
+                self._terminal_failure(connection, job, "TARGET_BYTES_UNSATISFIED")
+                return
+            selected_id, selected_bytes, selected_key = selected
             OUTPUT_BYTES.labels(content_type=input_type).inc(selected_bytes)
             COMPRESSION_RATIO.labels(content_type=input_type).observe(
                 len(source_bytes) / max(selected_bytes, 1)
@@ -997,6 +999,17 @@ class CompressionWorker:
             return modules[input_type]
         except KeyError as error:
             raise ValueError(f"unsupported content type: {input_type}") from error
+
+    @staticmethod
+    def _select_candidate(
+        candidates: list[tuple[str, int, str]], target_bytes: int | None
+    ) -> tuple[str, int, str] | None:
+        eligible = (
+            candidates
+            if target_bytes is None
+            else [candidate for candidate in candidates if candidate[1] <= target_bytes]
+        )
+        return min(eligible, key=lambda item: (item[1], item[0])) if eligible else None
 
     @staticmethod
     def _detected_mime(input_type: str, declared_mime: str) -> str:

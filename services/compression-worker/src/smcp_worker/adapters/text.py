@@ -6,6 +6,7 @@ from importlib.metadata import version
 import brotli
 import zstandard
 
+from smcp_worker.adapters.external import pareto_frontier_per_codec
 from smcp_worker.models import (
     CodecCapabilities,
     EncodedCandidate,
@@ -146,20 +147,10 @@ def generate_text_candidates(
                 raise RuntimeError(f"{candidate.codec_id} failed exact round-trip")
             candidates.append((candidate, report))
 
-    # Equal-quality lossless candidates are Pareto-ordered by bytes. Keep the smallest
-    # configuration per codec so operators can compare independent implementations.
-    smallest_by_codec: dict[str, tuple[EncodedCandidate, QualityReport]] = {}
-    for candidate, report in candidates:
-        previous = smallest_by_codec.get(candidate.codec_id)
-        stable_key = (len(candidate.payload), repr(sorted(candidate.config.items())))
-        previous_key = (
-            (len(previous[0].payload), repr(sorted(previous[0].config.items())))
-            if previous
-            else None
-        )
-        if previous_key is None or stable_key < previous_key:
-            smallest_by_codec[candidate.codec_id] = (candidate, report)
-    return sorted(
-        smallest_by_codec.values(),
-        key=lambda item: (len(item[0].payload), item[0].codec_id),
+    return pareto_frontier_per_codec(
+        candidates,
+        codec_id=lambda candidate: candidate.codec_id,
+        payload_size=lambda candidate: len(candidate.payload),
+        quality=lambda _report: (1.0,),
+        stable_config=lambda candidate: repr(sorted(candidate.config.items())),
     )

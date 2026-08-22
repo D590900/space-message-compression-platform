@@ -10,7 +10,8 @@ from pathlib import Path
 from smcp_worker.adapters.external import (
     digest,
     executable,
-    pareto_smallest_per_codec,
+    numeric_metric,
+    pareto_frontier_per_codec,
     run,
     transform,
     version_line,
@@ -355,9 +356,16 @@ def generate_video_candidates(
         report = adapter.measure(prepared, adapter.decode(candidate))
         if report.quality_gate_passed:
             candidates.append((candidate, report))
-    return pareto_smallest_per_codec(
+    return pareto_frontier_per_codec(
         candidates,
         codec_id=lambda candidate: candidate.codec_id,
         payload_size=lambda candidate: len(candidate.payload),
+        quality=lambda report: (
+            numeric_metric(report.metrics, "vmaf")
+            if report.metrics["vmaf"] is not None
+            else numeric_metric(report.metrics, "ssim") * 100,
+            numeric_metric(report.metrics, "temporal_stability_proxy"),
+            -numeric_metric(report.metrics, "duration_delta_seconds"),
+        ),
         stable_config=lambda candidate: repr(sorted(candidate.config.items())),
     )
