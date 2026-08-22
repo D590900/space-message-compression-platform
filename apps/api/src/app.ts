@@ -20,6 +20,7 @@ import {
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 
 import {
+  ApiKeyPolicyProblem,
   type ClerkGateway,
   ProductionClerkGateway,
   requireApiKey,
@@ -174,6 +175,8 @@ export async function buildApp(
   });
 
   const apiPrincipal = async (request: FastifyRequest, scope: ApiScope) => {
+    const route =
+      request.routeOptions.url ?? request.url.split("?")[0] ?? request.url;
     let principal;
     try {
       principal = await requireApiKey(
@@ -182,16 +185,51 @@ export async function buildApp(
         scope,
       );
     } catch (error) {
+      if (error instanceof ApiKeyPolicyProblem) {
+        await dependencies.database.auditApiKeyUsage(
+          error.principal.tenantSubject,
+          error.principal.actorSubject,
+          error.principal.keyId,
+          request.id,
+          request.method,
+          route,
+          "error",
+          error.type,
+        );
+      }
       dependencies.metrics.recordApiKeyFailure(
         error instanceof ApiProblem ? error.type : "unknown",
       );
       throw error;
     }
-    await dependencies.rateLimiter.consume(
+    try {
+      await dependencies.rateLimiter.consume(
+        principal.tenantSubject,
+        principal.keyId,
+        request.method,
+        route,
+      );
+    } catch (error) {
+      await dependencies.database.auditApiKeyUsage(
+        principal.tenantSubject,
+        principal.actorSubject,
+        principal.keyId,
+        request.id,
+        request.method,
+        route,
+        "error",
+        error instanceof ApiProblem ? error.type : "unknown",
+      );
+      throw error;
+    }
+    await dependencies.database.auditApiKeyUsage(
       principal.tenantSubject,
+      principal.actorSubject,
       principal.keyId,
+      request.id,
       request.method,
-      request.routeOptions.url ?? request.url,
+      route,
+      "success",
     );
     return principal;
   };

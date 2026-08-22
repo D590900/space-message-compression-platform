@@ -12,6 +12,17 @@ export type ApiKeyPrincipal = {
   scopes: readonly string[];
 };
 
+export class ApiKeyPolicyProblem extends ApiProblem {
+  public constructor(
+    status: number,
+    title: string,
+    type: string,
+    public readonly principal: ApiKeyPrincipal,
+  ) {
+    super(status, title, type);
+  }
+}
+
 export type SessionPrincipal = {
   kind: "session";
   tenantSubject: string;
@@ -156,35 +167,40 @@ export async function requireApiKey(
     );
   }
 
-  if (key.claims?.["smcp_issued"] !== true) {
-    throw new ApiProblem(
-      403,
-      "API key was not issued by this service",
-      "urn:smcp:problem:invalid-api-key-claims",
-    );
-  }
-  if (!key.subject.startsWith("org_")) {
-    throw new ApiProblem(
-      403,
-      "Organization API key required",
-      "urn:smcp:problem:organization-required",
-    );
-  }
-  if (!key.scopes.includes(scope)) {
-    throw new ApiProblem(
-      403,
-      "API key scope is insufficient",
-      "urn:smcp:problem:insufficient-scope",
-    );
-  }
-
-  return {
+  const principal: ApiKeyPrincipal = {
     kind: "api_key",
     tenantSubject: key.subject,
     actorSubject: key.createdBy ?? key.subject,
     keyId: key.id,
     scopes: key.scopes,
   };
+
+  if (key.claims?.["smcp_issued"] !== true) {
+    throw new ApiKeyPolicyProblem(
+      403,
+      "API key was not issued by this service",
+      "urn:smcp:problem:invalid-api-key-claims",
+      principal,
+    );
+  }
+  if (!key.subject.startsWith("org_")) {
+    throw new ApiKeyPolicyProblem(
+      403,
+      "Organization API key required",
+      "urn:smcp:problem:organization-required",
+      principal,
+    );
+  }
+  if (!key.scopes.includes(scope)) {
+    throw new ApiKeyPolicyProblem(
+      403,
+      "API key scope is insufficient",
+      "urn:smcp:problem:insufficient-scope",
+      principal,
+    );
+  }
+
+  return principal;
 }
 
 export async function requireSession(

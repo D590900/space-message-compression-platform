@@ -877,6 +877,29 @@ export class Database {
     );
   }
 
+  public async auditApiKeyUsage(
+    tenantSubject: string,
+    actorSubject: string,
+    apiKeyId: string,
+    requestId: string,
+    method: string,
+    route: string,
+    outcome: "success" | "error",
+    problemType?: string,
+  ): Promise<void> {
+    await this.sql`
+      INSERT INTO audit_events (
+        tenant_subject, actor_subject, api_key_id, action, resource_type,
+        resource_id, request_id, outcome, metadata
+      ) VALUES (
+        ${tenantSubject}, ${actorSubject}, ${apiKeyId},
+        ${outcome === "success" ? "api_key.used" : "api_key.error"},
+        'endpoint', ${route}, ${requestId}, ${outcome},
+        ${this.sql.json({ method, ...(problemType ? { problem_type: problemType } : {}) })}
+      )
+    `;
+  }
+
   public async apiKeyRotationExists(
     tenantSubject: string,
     oldKeyId: string,

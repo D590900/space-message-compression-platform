@@ -61,6 +61,7 @@ describe("system capability routes", () => {
 
   it("returns enabled and disabled codecs only with codecs:read", async () => {
     const createCompressionJob = vi.fn();
+    const auditApiKeyUsage = vi.fn(() => Promise.resolve());
     const database = {
       listCodecCapabilities: () =>
         Promise.resolve([
@@ -86,6 +87,7 @@ describe("system capability routes", () => {
           },
         ]),
       createCompressionJob,
+      auditApiKeyUsage,
       close: () => Promise.resolve(),
     } as unknown as Database;
     const queue = { close: () => Promise.resolve() } as unknown as JobQueue;
@@ -148,5 +150,15 @@ describe("system capability routes", () => {
       type: "urn:smcp:problem:semantic-profile-unavailable",
     });
     expect(createCompressionJob).not.toHaveBeenCalled();
+    expect(auditApiKeyUsage).toHaveBeenCalledTimes(2);
+    expect(auditApiKeyUsage).toHaveBeenLastCalledWith(
+      "org_test",
+      "user_test",
+      "apikey_test",
+      expect.any(String),
+      "POST",
+      "/v1/compressions",
+      "success",
+    );
   });
 });
