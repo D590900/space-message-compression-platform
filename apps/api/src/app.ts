@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHmac, randomBytes, randomUUID } from "node:crypto";
 
 import rateLimit from "@fastify/rate-limit";
 import {
@@ -77,7 +77,9 @@ export async function buildApp(
   config: ApiConfig,
   overrides: Partial<AppDependencies> = {},
 ): Promise<{ app: FastifyInstance; dependencies: AppDependencies }> {
-  const database = overrides.database ?? new Database(config.DATABASE_URL);
+  const database =
+    overrides.database ??
+    new Database(config.DATABASE_URL, config.IDENTIFIER_HMAC_SECRET);
   const clerk = overrides.clerk ?? new ProductionClerkGateway(config);
   const webhookSecretBox = new SecretBox(config.WEBHOOK_SECRET_ENCRYPTION_KEY);
   const dependencies: AppDependencies = {
@@ -107,6 +109,7 @@ export async function buildApp(
         config.VALKEY_URL,
         config.TENANT_RATE_COST_PER_MINUTE,
         config.CREDENTIAL_ROUTE_COST_PER_MINUTE,
+        config.IDENTIFIER_HMAC_SECRET,
       ),
   };
   dependencies.keyRotationScheduler.start();
@@ -129,7 +132,14 @@ export async function buildApp(
       const credential =
         request.headers.authorization ?? request.headers.cookie ?? request.ip;
       const route = request.routeOptions.url ?? request.url.split("?")[0];
-      return `${request.method}:${route}:${createHash("sha256").update(credential).digest("hex")}`;
+      const credentialDigest = createHmac(
+        "sha256",
+        config.IDENTIFIER_HMAC_SECRET,
+      )
+        .update("pre-auth\0")
+        .update(credential)
+        .digest("hex");
+      return `${request.method}:${route}:${credentialDigest}`;
     },
   });
 

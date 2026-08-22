@@ -48,6 +48,7 @@ const configSchema = z
       .int()
       .positive()
       .default(120),
+    IDENTIFIER_HMAC_SECRET: z.string().min(32),
     CAPSULE_CLI_PATH: z.string().min(1).default("smcp-capsule"),
     KEY_ROTATION_POLL_MS: z.coerce
       .number()

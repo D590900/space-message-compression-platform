@@ -19,6 +19,7 @@ const config = loadConfig({
   LOG_LEVEL: "silent",
   DATABASE_URL: "postgresql://test:test@localhost:5432/test",
   VALKEY_URL: "redis://localhost:6379/0",
+  IDENTIFIER_HMAC_SECRET: "test-identifier-hmac-secret-32-bytes",
   CLERK_SECRET_KEY: "test-secret",
   CLERK_PUBLISHABLE_KEY: "test-publishable",
   WEBHOOK_SECRET_ENCRYPTION_KEY: "MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI=",

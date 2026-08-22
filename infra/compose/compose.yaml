@@ -17,6 +17,8 @@ x-app-environment: &app-environment
   MAX_VIDEO_FRAMES: ${MAX_VIDEO_FRAMES:-216000}
   TENANT_RATE_COST_PER_MINUTE: ${TENANT_RATE_COST_PER_MINUTE:-1000}
   CREDENTIAL_ROUTE_COST_PER_MINUTE: ${CREDENTIAL_ROUTE_COST_PER_MINUTE:-120}
+  # Local-only HMAC key. Production must inject a managed random secret.
+  IDENTIFIER_HMAC_SECRET: ${IDENTIFIER_HMAC_SECRET:-smcp-local-identifier-hmac-secret-change-me}
   # Local-only 32-byte key in Base64. Production must inject a managed secret.
   WEBHOOK_SECRET_ENCRYPTION_KEY: ${WEBHOOK_SECRET_ENCRYPTION_KEY:-MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI=}
   OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-}

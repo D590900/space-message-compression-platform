@@ -38,9 +38,11 @@ Every project receives hard monthly limits for input bytes, compression jobs and
 
 ## Rate and cost limits
 
-The API applies two layers. A 120-request-per-minute pre-authentication shield limits abusive traffic by a SHA-256 digest of the supplied credential or client address and route. After Clerk authentication, one atomic Valkey script charges both a tenant-wide budget and a credential-plus-endpoint budget. This prevents a tenant from multiplying capacity by creating more keys while still containing one hot or compromised credential. Identifiers are hashed before they enter Valkey keys.
+The API applies two layers. A 120-request-per-minute pre-authentication shield limits abusive traffic by a domain-separated HMAC of the supplied credential or client address and route. After Clerk authentication, one atomic Valkey script charges both a tenant-wide budget and a credential-plus-endpoint budget. This prevents a tenant from multiplying capacity by creating more keys while still containing one hot or compromised credential. Identifiers are HMACed before they enter Valkey keys.
 
 Read and delete operations cost 1 unit, ordinary mutations cost 2, upload presigning and webhook creation cost 5, compression/decompression cost 10, and capsule planning/build creation cost 20. `TENANT_RATE_COST_PER_MINUTE` defaults to 1,000 units and `CREDENTIAL_ROUTE_COST_PER_MINUTE` to 120 units in a fixed one-minute window. Exhaustion fails closed with status `429` and `urn:smcp:problem:rate-limit-exceeded`. These operational limits complement, rather than replace, the durable per-project PostgreSQL quotas.
+
+`IDENTIFIER_HMAC_SECRET` must be a managed random secret of at least 32 characters. It domain-separates pre-auth keys, post-auth Valkey keys and idempotency request fingerprints; it never signs user-visible data. Keep it stable and backed up. Rotating it requires an explicit migration or expiry plan for existing idempotency records, otherwise old keys will correctly stop matching their stored fingerprints.
 
 ## Worker delivery recovery
 

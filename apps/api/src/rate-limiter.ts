@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHmac } from "node:crypto";
 
 import { Redis } from "ioredis";
 
@@ -35,8 +35,11 @@ export interface CostRateLimiterGateway {
   close(): Promise<void>;
 }
 
-function digest(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
+function digest(secret: string, value: string): string {
+  return createHmac("sha256", secret)
+    .update("rate-limit\0")
+    .update(value)
+    .digest("hex");
 }
 
 export class CostRateLimiter implements CostRateLimiterGateway {
@@ -46,6 +49,7 @@ export class CostRateLimiter implements CostRateLimiterGateway {
     url: string,
     private readonly tenantLimit: number,
     private readonly credentialRouteLimit: number,
+    private readonly identifierHmacSecret: string,
     redis?: Redis,
   ) {
     this.redis =
@@ -66,10 +70,10 @@ export class CostRateLimiter implements CostRateLimiterGateway {
     if (this.redis.status === "wait") await this.redis.connect();
     const bucket = Math.floor(Date.now() / (WINDOW_SECONDS * 1_000));
     const cost = requestCost(method, route);
-    const tenantKey = `smcp:ratelimit:${bucket}:tenant:${digest(tenantSubject)}`;
+    const tenantKey = `smcp:ratelimit:${bucket}:tenant:${digest(this.identifierHmacSecret, tenantSubject)}`;
     const credentialKey =
-      `smcp:ratelimit:${bucket}:credential:${digest(credentialId)}:` +
-      digest(`${method} ${route}`);
+      `smcp:ratelimit:${bucket}:credential:${digest(this.identifierHmacSecret, credentialId)}:` +
+      digest(this.identifierHmacSecret, `${method} ${route}`);
     const allowed = await this.redis.eval(
       CONSUME_SCRIPT,
       2,
