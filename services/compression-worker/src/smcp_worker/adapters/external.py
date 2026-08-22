@@ -4,7 +4,7 @@ import hashlib
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 COMMAND_TIMEOUT_SECONDS = 300
@@ -64,20 +64,60 @@ def digest(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def pareto_smallest_per_codec[Candidate, Report](
+def numeric_metric(metrics: Mapping[str, object], key: str) -> float:
+    value = metrics.get(key)
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError(f"quality metric {key} is not numeric")
+    return float(value)
+
+
+def pareto_frontier_per_codec[Candidate, Report](
     candidates: list[tuple[Candidate, Report]],
     *,
     codec_id: Callable[[Candidate], str],
     payload_size: Callable[[Candidate], int],
+    quality: Callable[[Report], tuple[float, ...]],
     stable_config: Callable[[Candidate], str],
 ) -> list[tuple[Candidate, Report]]:
-    smallest: dict[str, tuple[Candidate, Report]] = {}
-    for item in candidates:
-        candidate = item[0]
-        key = codec_id(candidate)
-        previous = smallest.get(key)
-        candidate_key = (payload_size(candidate), stable_config(candidate))
-        previous_key = (payload_size(previous[0]), stable_config(previous[0])) if previous else None
-        if previous_key is None or candidate_key < previous_key:
-            smallest[key] = item
-    return sorted(smallest.values(), key=lambda item: (payload_size(item[0]), codec_id(item[0])))
+    """Keep deterministic byte/quality non-dominated configurations per codec."""
+
+    def dominates(left: tuple[Candidate, Report], right: tuple[Candidate, Report]) -> bool:
+        left_candidate, left_report = left
+        right_candidate, right_report = right
+        if codec_id(left_candidate) != codec_id(right_candidate):
+            return False
+        left_quality = quality(left_report)
+        right_quality = quality(right_report)
+        if len(left_quality) != len(right_quality):
+            raise ValueError("quality vectors must have a stable dimension")
+        no_worse = payload_size(left_candidate) <= payload_size(right_candidate) and all(
+            left_value >= right_value
+            for left_value, right_value in zip(left_quality, right_quality, strict=True)
+        )
+        if not no_worse:
+            return False
+        strictly_better = payload_size(left_candidate) < payload_size(right_candidate) or any(
+            left_value > right_value
+            for left_value, right_value in zip(left_quality, right_quality, strict=True)
+        )
+        if strictly_better:
+            return True
+        return stable_config(left_candidate) < stable_config(right_candidate)
+
+    frontier = [
+        item
+        for index, item in enumerate(candidates)
+        if not any(
+            dominates(other, item)
+            for other_index, other in enumerate(candidates)
+            if other_index != index
+        )
+    ]
+    return sorted(
+        frontier,
+        key=lambda item: (
+            payload_size(item[0]),
+            codec_id(item[0]),
+            stable_config(item[0]),
+        ),
+    )

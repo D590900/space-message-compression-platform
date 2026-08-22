@@ -130,3 +130,23 @@ def test_worker_failure_audit_contains_only_content_free_state() -> None:
     assert parameters[6] == (
         '{"attempt": 2, "error_code": "MEDIA_PROBE_FAILED", "status": "FAILED_TERMINAL"}'
     )
+
+
+def test_candidate_selection_enforces_target_bytes_with_a_stable_tie_break() -> None:
+    candidates = [
+        ("candidate-b", 90, "object-b"),
+        ("candidate-a", 90, "object-a"),
+        ("candidate-small", 80, "object-small"),
+    ]
+
+    assert CompressionWorker._select_candidate(candidates, 85) == (
+        "candidate-small",
+        80,
+        "object-small",
+    )
+    assert CompressionWorker._select_candidate(candidates[0:2], 85) is None
+    assert CompressionWorker._select_candidate(candidates[0:2], None) == (
+        "candidate-a",
+        90,
+        "object-a",
+    )

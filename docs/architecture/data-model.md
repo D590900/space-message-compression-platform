@@ -10,6 +10,8 @@ Any active state may move to `FAILED_RETRYABLE`, `FAILED_TERMINAL` or, for compr
 
 Every worker failure transition appends an audit record in the same PostgreSQL transaction. Its metadata is limited to job type/ID, stable error code, state and attempt count; payloads, object keys and decoded media details are excluded.
 
+Candidate selection operates only on measured, quality-gated Pareto points. `target_bytes`, when supplied, is a hard candidate-payload ceiling rather than a hint; if no measured candidate fits, the job ends as `FAILED_TERMINAL` with `TARGET_BYTES_UNSATISFIED` instead of returning an oversized artifact.
+
 ## Idempotency
 
 Mutating API requests store `(tenant_subject, route, idempotency_key, request_fingerprint)`. Reuse with the same fingerprint returns the stored response; reuse with different input returns conflict. Entries expire only after the documented retry horizon.
