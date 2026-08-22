@@ -2,6 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 
 import type {
   ContentType,
+  CreateCapsulePlanInput,
+  CreateCapsuleInput,
   CreateCompressionInput,
   CreateDecompressionInput,
   CreateProjectInput,
@@ -108,6 +110,48 @@ export type ModelManifestRecord = {
   enabled: boolean;
 };
 
+export type CapsuleCandidateRecord = {
+  job_id: string;
+  input_type: ContentType;
+  candidate_id: string;
+  artifact_id: string;
+  codec_id: string;
+  codec_version: string;
+  payload_bytes: number;
+  container_overhead_bytes: number;
+};
+
+export type CapsulePlanRecord = {
+  id: string;
+  tenant_subject: string;
+  project_id: string;
+  budget_bytes: number;
+  ecc_percent: number;
+  status: string;
+  solver: string;
+  report: Record<string, unknown>;
+  created_at: Date;
+};
+
+export type CapsuleRecord = {
+  id: string;
+  tenant_subject: string;
+  project_id: string;
+  plan_id: string;
+  budget_bytes: number;
+  actual_bytes: number | null;
+  object_key: string | null;
+  sha256_hex: string | null;
+  merkle_root_hex: string | null;
+  format_major: number | null;
+  format_minor: number | null;
+  status: string;
+  error_code: string | null;
+  build_options: Record<string, unknown>;
+  created_at: Date;
+  completed_at: Date | null;
+};
+
 export class Database {
   private readonly sql;
 
@@ -149,6 +193,249 @@ export class Database {
       FROM model_registry
       ORDER BY id, version
     `;
+  }
+
+  public async getCapsuleCandidates(
+    tenantSubject: string,
+    projectId: string,
+    jobIds: string[],
+  ): Promise<CapsuleCandidateRecord[]> {
+    await this.assertProject(tenantSubject, projectId);
+    const rows = await this.sql<CapsuleCandidateRecord[]>`
+      SELECT j.id AS job_id, j.input_type, c.id AS candidate_id,
+             a.id AS artifact_id, c.codec_id, c.codec_version,
+             c.payload_bytes, c.container_overhead_bytes
+      FROM compression_jobs j
+      JOIN encoding_candidates c
+        ON c.job_id = j.id AND c.tenant_subject = j.tenant_subject
+      JOIN artifacts a
+        ON a.candidate_id = c.id AND a.tenant_subject = c.tenant_subject
+      WHERE j.tenant_subject = ${tenantSubject}
+        AND j.project_id = ${projectId}
+        AND j.id = ANY(${jobIds})
+        AND j.status = 'COMPLETED'
+        AND c.quality_gate_passed = true
+      ORDER BY j.id, c.payload_bytes, c.id
+    `;
+    const found = new Set(rows.map((row) => row.job_id));
+    if (jobIds.some((id) => !found.has(id))) {
+      throw new ApiProblem(
+        422,
+        "Every capsule item must reference a completed job with a quality-gated candidate",
+        "urn:smcp:problem:capsule-item-unavailable",
+      );
+    }
+    return rows;
+  }
+
+  public async createCapsulePlan(
+    tenantSubject: string,
+    actorSubject: string,
+    apiKeyId: string,
+    requestId: string,
+    idempotencyKey: string,
+    input: CreateCapsulePlanInput,
+    solver: string,
+    report: Record<string, unknown>,
+  ): Promise<{ plan: CapsulePlanRecord; created: boolean }> {
+    const fingerprint = createHash("sha256")
+      .update(JSON.stringify(input))
+      .digest();
+    return this.sql.begin(async (transaction) => {
+      const previous = await transaction<CapsulePlanRecord[]>`
+        SELECT id, tenant_subject, project_id, budget_bytes, ecc_percent,
+               status, solver, report, created_at
+        FROM capsule_plans
+        WHERE tenant_subject = ${tenantSubject}
+          AND project_id = ${input.project_id}
+          AND idempotency_key = ${idempotencyKey}
+        FOR UPDATE
+      `;
+      if (previous[0]) {
+        const matches = await transaction<{ matches: boolean }[]>`
+          SELECT request_fingerprint = ${fingerprint} AS matches
+          FROM capsule_plans WHERE id = ${previous[0].id}
+        `;
+        if (!matches[0]?.matches) {
+          throw new ApiProblem(
+            409,
+            "Idempotency key reused with different input",
+            "urn:smcp:problem:idempotency-conflict",
+          );
+        }
+        return { plan: previous[0], created: false };
+      }
+      const id = randomUUID();
+      const rows = await transaction<CapsulePlanRecord[]>`
+        INSERT INTO capsule_plans (
+          id, tenant_subject, project_id, budget_bytes, ecc_percent,
+          status, solver, report, idempotency_key, request_fingerprint
+        ) VALUES (
+          ${id}, ${tenantSubject}, ${input.project_id}, ${input.budget_bytes},
+          ${input.ecc_percent}, 'COMPLETED', ${solver},
+          ${transaction.json(report as postgres.JSONValue)},
+          ${idempotencyKey}, ${fingerprint}
+        )
+        RETURNING id, tenant_subject, project_id, budget_bytes, ecc_percent,
+                  status, solver, report, created_at
+      `;
+      await transaction`
+        INSERT INTO audit_events (
+          tenant_subject, project_id, actor_subject, api_key_id, action,
+          resource_type, resource_id, request_id, outcome
+        ) VALUES (
+          ${tenantSubject}, ${input.project_id}, ${actorSubject}, ${apiKeyId},
+          'capsule_plan.created', 'capsule_plan', ${id}, ${requestId}, 'success'
+        )
+      `;
+      return { plan: rows[0]!, created: true };
+    });
+  }
+
+  public async getCapsulePlan(
+    tenantSubject: string,
+    id: string,
+  ): Promise<CapsulePlanRecord> {
+    const rows = await this.sql<CapsulePlanRecord[]>`
+      SELECT id, tenant_subject, project_id, budget_bytes, ecc_percent,
+             status, solver, report, created_at
+      FROM capsule_plans
+      WHERE tenant_subject = ${tenantSubject} AND id = ${id}
+    `;
+    if (!rows[0])
+      throw new ApiProblem(
+        404,
+        "Capsule plan not found",
+        "urn:smcp:problem:not-found",
+      );
+    return rows[0];
+  }
+
+  public async createCapsuleJob(
+    tenantSubject: string,
+    actorSubject: string,
+    apiKeyId: string,
+    requestId: string,
+    idempotencyKey: string,
+    input: CreateCapsuleInput,
+  ): Promise<{ capsule: CapsuleRecord; created: boolean }> {
+    const fingerprint = createHash("sha256")
+      .update(JSON.stringify(input))
+      .digest();
+    return this.sql.begin(async (transaction) => {
+      const previous = await transaction<CapsuleRecord[]>`
+        SELECT id, tenant_subject, project_id, plan_id, budget_bytes,
+               actual_bytes, object_key,
+               CASE WHEN sha256 IS NULL THEN NULL ELSE encode(sha256, 'hex') END AS sha256_hex,
+               CASE WHEN merkle_root IS NULL THEN NULL ELSE encode(merkle_root, 'hex') END AS merkle_root_hex,
+               format_major, format_minor, status, error_code, build_options,
+               created_at, completed_at
+        FROM capsules
+        WHERE tenant_subject = ${tenantSubject}
+          AND project_id = ${input.project_id}
+          AND idempotency_key = ${idempotencyKey}
+        FOR UPDATE
+      `;
+      if (previous[0]) {
+        const matches = await transaction<{ matches: boolean }[]>`
+          SELECT request_fingerprint = ${fingerprint} AS matches
+          FROM capsules WHERE id = ${previous[0].id}
+        `;
+        if (!matches[0]?.matches) {
+          throw new ApiProblem(
+            409,
+            "Idempotency key reused with different input",
+            "urn:smcp:problem:idempotency-conflict",
+          );
+        }
+        return { capsule: previous[0], created: false };
+      }
+      const plans = await transaction<CapsulePlanRecord[]>`
+        SELECT id, tenant_subject, project_id, budget_bytes, ecc_percent,
+               status, solver, report, created_at
+        FROM capsule_plans
+        WHERE id = ${input.plan_id}
+          AND tenant_subject = ${tenantSubject}
+          AND project_id = ${input.project_id}
+          AND status = 'COMPLETED'
+      `;
+      const plan = plans[0];
+      if (!plan) {
+        throw new ApiProblem(
+          404,
+          "Completed capsule plan not found",
+          "urn:smcp:problem:not-found",
+        );
+      }
+      const id = randomUUID();
+      const buildOptions = {
+        ecc_percent: Number(plan.ecc_percent),
+        pad_to_budget: input.pad_to_budget,
+      };
+      const rows = await transaction<CapsuleRecord[]>`
+        INSERT INTO capsules (
+          id, tenant_subject, project_id, plan_id, budget_bytes,
+          status, idempotency_key, request_fingerprint, build_options
+        ) VALUES (
+          ${id}, ${tenantSubject}, ${input.project_id}, ${input.plan_id},
+          ${plan.budget_bytes}, 'PENDING', ${idempotencyKey}, ${fingerprint},
+          ${transaction.json(buildOptions)}
+        )
+        RETURNING id, tenant_subject, project_id, plan_id, budget_bytes,
+                  actual_bytes, object_key, NULL::text AS sha256_hex,
+                  NULL::text AS merkle_root_hex, format_major, format_minor,
+                  status, error_code, build_options, created_at, completed_at
+      `;
+      await transaction`
+        INSERT INTO outbox_events (tenant_subject, topic, aggregate_id, payload)
+        VALUES (
+          ${tenantSubject}, 'capsule.requested', ${id},
+          ${transaction.json({ capsule_id: id, tenant_subject: tenantSubject })}
+        )
+      `;
+      await transaction`
+        INSERT INTO audit_events (
+          tenant_subject, project_id, actor_subject, api_key_id, action,
+          resource_type, resource_id, request_id, outcome
+        ) VALUES (
+          ${tenantSubject}, ${input.project_id}, ${actorSubject}, ${apiKeyId},
+          'capsule.created', 'capsule', ${id}, ${requestId}, 'success'
+        )
+      `;
+      return { capsule: rows[0]!, created: true };
+    });
+  }
+
+  public async getCapsule(
+    tenantSubject: string,
+    id: string,
+  ): Promise<CapsuleRecord> {
+    const rows = await this.sql<CapsuleRecord[]>`
+      SELECT id, tenant_subject, project_id, plan_id, budget_bytes,
+             actual_bytes, object_key,
+             CASE WHEN sha256 IS NULL THEN NULL ELSE encode(sha256, 'hex') END AS sha256_hex,
+             CASE WHEN merkle_root IS NULL THEN NULL ELSE encode(merkle_root, 'hex') END AS merkle_root_hex,
+             format_major, format_minor, status, error_code, build_options,
+             created_at, completed_at
+      FROM capsules
+      WHERE tenant_subject = ${tenantSubject} AND id = ${id}
+    `;
+    if (!rows[0])
+      throw new ApiProblem(
+        404,
+        "Capsule not found",
+        "urn:smcp:problem:not-found",
+      );
+    return rows[0];
+  }
+
+  public async getCapsuleManifest(
+    tenantSubject: string,
+    id: string,
+  ): Promise<{ capsule: CapsuleRecord; plan: CapsulePlanRecord }> {
+    const capsule = await this.getCapsule(tenantSubject, id);
+    const plan = await this.getCapsulePlan(tenantSubject, capsule.plan_id);
+    return { capsule, plan };
   }
 
   public async createProject(

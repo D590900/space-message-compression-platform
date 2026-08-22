@@ -90,6 +90,47 @@ export const createDecompressionSchema = z.strictObject({
   artifact_id: uuidSchema,
 });
 
+export const createCapsulePlanSchema = z
+  .strictObject({
+    project_id: uuidSchema,
+    budget_bytes: z.int().positive().max(1_073_741_824).default(2_000_000),
+    ecc_percent: z.int().min(0).max(50).default(0),
+    items: z
+      .array(
+        z.strictObject({
+          job_id: uuidSchema,
+          required: z.boolean(),
+          utility: z.int().min(0).max(1_000_000),
+        }),
+      )
+      .min(1)
+      .max(10_000),
+  })
+  .superRefine((input, context) => {
+    const ids = new Set<string>();
+    input.items.forEach((item, index) => {
+      if (ids.has(item.job_id)) {
+        context.addIssue({
+          code: "custom",
+          path: ["items", index, "job_id"],
+          message: "job_id values must be unique",
+        });
+      }
+      ids.add(item.job_id);
+    });
+  });
+
+export const createCapsuleSchema = z.strictObject({
+  project_id: uuidSchema,
+  plan_id: uuidSchema,
+  pad_to_budget: z.boolean().default(false),
+});
+
+export const verifyCapsuleSchema = z.strictObject({
+  project_id: uuidSchema,
+  capsule_id: uuidSchema,
+});
+
 export const resourceIdParamsSchema = z.strictObject({ id: uuidSchema });
 
 export const idempotencyKeySchema = z
@@ -114,3 +155,6 @@ export type CreateCompressionInput = z.infer<typeof createCompressionSchema>;
 export type CreateDecompressionInput = z.infer<
   typeof createDecompressionSchema
 >;
+export type CreateCapsulePlanInput = z.infer<typeof createCapsulePlanSchema>;
+export type CreateCapsuleInput = z.infer<typeof createCapsuleSchema>;
+export type VerifyCapsuleInput = z.infer<typeof verifyCapsuleSchema>;

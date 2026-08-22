@@ -27,6 +27,7 @@ const configSchema = z.object({
   S3_FORCE_PATH_STYLE: booleanString.default(true),
   SIGNED_URL_TTL_SECONDS: z.coerce.number().int().min(30).max(900).default(300),
   MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(1_073_741_824),
+  CAPSULE_CLI_PATH: z.string().min(1).default("smcp-capsule"),
 });
 
 export type ApiConfig = z.infer<typeof configSchema>;

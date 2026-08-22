@@ -1,4 +1,10 @@
 # syntax=docker/dockerfile:1.12
+FROM rust:1.98.0-slim-bookworm AS capsule-build
+WORKDIR /workspace
+COPY Cargo.toml Cargo.lock ./
+COPY crates crates
+RUN cargo build --locked --release -p smcp-capsule-cli
+
 FROM debian:bookworm-slim AS ffmpeg-build
 ARG FFMPEG_VERSION=9.0.1
 RUN apt-get update \
@@ -48,6 +54,7 @@ RUN apt-get update \
     && groupadd --system smcp \
     && useradd --system --gid smcp --home-dir /opt/worker smcp
 COPY --from=ffmpeg-build /opt/ffmpeg/bin/ffmpeg /opt/ffmpeg/bin/ffprobe /usr/local/bin/
+COPY --from=capsule-build /workspace/target/release/smcp-capsule /usr/local/bin/smcp-capsule
 COPY --from=ghcr.io/astral-sh/uv:0.11.21 /uv /uvx /bin/
 WORKDIR /opt/worker
 COPY services/compression-worker/pyproject.toml services/compression-worker/uv.lock ./

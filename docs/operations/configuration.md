@@ -12,6 +12,14 @@ Production refuses development authentication bypasses. Protected E2E CI supplie
 
 Buckets must be private, encrypted and deny anonymous listing. Signed URLs default to five minutes. `DELETE_ORIGINALS_AFTER_SECONDS=0` means delete after successful verification; a positive value schedules bounded retention. Deletion preserves only content-free audit facts.
 
+The local MinIO service uses a Compose-only static KMS key so `AES256` SSE-S3 writes are tested end to end. That key is public development configuration and must never be reused outside the local stack. Production storage must use a managed KMS and independently controlled key rotation.
+
+## Capsule runtime
+
+Both API and worker production images contain the same release-built `smcp-capsule` binary. The API invokes its planner with argv-only process execution; the worker constructs binary sections in a private temporary directory, builds atomically, invokes the Rust verifier, and uploads only verified output. Capsule failures are terminal and do not stop the worker from consuming unrelated jobs.
+
+The default capsule budget is 2,000,000 bytes. `pad_to_budget` is opt-in. The database remains authoritative for plan selection, build state, entry ordinals, digests and the reconstruction report; Valkey only transports the capsule identifier and tenant subject.
+
 ## Optional codecs
 
 Optional neural adapters are disabled until an operator installs pinned dependencies, places externally obtained weights in the immutable model cache and validates their manifests. No application path downloads weights.
