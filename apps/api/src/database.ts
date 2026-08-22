@@ -210,6 +210,15 @@ export type WebhookDeliveryClaim = {
   secret_ciphertext: Buffer;
 };
 
+export type JobOutboxClaim = {
+  id: string;
+  tenant_subject: string;
+  topic: string;
+  aggregate_id: string;
+  payload: Record<string, unknown>;
+  attempt: number;
+};
+
 export type ProjectUsageRecord = {
   project_id: string;
   period_start: Date;
@@ -506,7 +515,11 @@ export class Database {
         )
         VALUES (
           ${tenantSubject}, ${input.project_id}, 'capsule.requested', ${id},
-          ${transaction.json({ capsule_id: id, tenant_subject: tenantSubject })}
+          ${transaction.json({
+            capsule_id: id,
+            tenant_subject: tenantSubject,
+            request_id: requestId,
+          })}
         )
       `;
       await transaction`
@@ -1281,7 +1294,11 @@ export class Database {
         )
         VALUES (
           ${tenantSubject}, ${input.project_id}, 'compression.requested', ${id},
-          ${transaction.json({ job_id: id, tenant_subject: tenantSubject })}
+          ${transaction.json({
+            job_id: id,
+            tenant_subject: tenantSubject,
+            request_id: requestId,
+          })}
         )
       `;
       await transaction`
@@ -1485,7 +1502,11 @@ export class Database {
         )
         VALUES (
           ${tenantSubject}, ${input.project_id}, 'decompression.requested', ${id},
-          ${transaction.json({ decompression_id: id, tenant_subject: tenantSubject })}
+          ${transaction.json({
+            decompression_id: id,
+            tenant_subject: tenantSubject,
+            request_id: requestId,
+          })}
         )
       `;
       await transaction`
@@ -1681,6 +1702,66 @@ export class Database {
     );
   }
 
+  public async claimJobOutboxEvents(
+    claimToken: string,
+    limit: number,
+  ): Promise<JobOutboxClaim[]> {
+    const topics = [
+      "compression.requested",
+      "decompression.requested",
+      "capsule.requested",
+    ];
+    return this.sql<JobOutboxClaim[]>`
+      UPDATE outbox_events AS event
+      SET claim_token = ${claimToken}, claimed_at = now(),
+          attempt = event.attempt + 1
+      WHERE event.id IN (
+        SELECT pending.id
+        FROM outbox_events AS pending
+        WHERE pending.topic = ANY(${topics})
+          AND pending.published_at IS NULL
+          AND pending.next_attempt_at <= now()
+          AND (
+            pending.claimed_at IS NULL
+            OR pending.claimed_at < now() - interval '5 minutes'
+          )
+        ORDER BY pending.next_attempt_at, pending.created_at, pending.id
+        FOR UPDATE SKIP LOCKED
+        LIMIT ${limit}
+      )
+      RETURNING event.id, event.tenant_subject, event.topic,
+                event.aggregate_id, event.payload, event.attempt
+    `;
+  }
+
+  public async completeJobOutboxEvent(
+    id: string,
+    claimToken: string,
+  ): Promise<void> {
+    await this.sql`
+      UPDATE outbox_events
+      SET published_at = now(), claim_token = NULL, claimed_at = NULL,
+          last_error = NULL
+      WHERE id = ${id} AND claim_token = ${claimToken}
+    `;
+  }
+
+  public async failJobOutboxEvent(
+    id: string,
+    claimToken: string,
+    attempt: number,
+    errorCode: string,
+  ): Promise<void> {
+    await this.sql`
+      UPDATE outbox_events
+      SET claim_token = NULL, claimed_at = NULL, last_error = ${errorCode},
+          next_attempt_at = now()
+            + power(2, LEAST(${attempt}, 10)) * interval '1 second'
+      WHERE id = ${id} AND claim_token = ${claimToken}
+        AND published_at IS NULL
+    `;
+  }
+
   public async materializeWebhookDeliveries(): Promise<void> {
     await this.sql.begin(async (transaction) => {
       await transaction`
@@ -1699,12 +1780,24 @@ export class Database {
          AND e.project_id = o.project_id
          AND e.enabled = true
          AND o.topic = ANY(e.event_types)
-        WHERE o.published_at IS NULL AND o.project_id IS NOT NULL
+        WHERE o.published_at IS NULL
+          AND o.project_id IS NOT NULL
+          AND o.topic IN (
+            'compression.completed',
+            'decompression.completed',
+            'capsule.completed'
+          )
         ON CONFLICT (endpoint_id, event_id) DO NOTHING
       `;
       await transaction`
         UPDATE outbox_events SET published_at = now()
-        WHERE published_at IS NULL AND project_id IS NOT NULL
+        WHERE published_at IS NULL
+          AND project_id IS NOT NULL
+          AND topic IN (
+            'compression.completed',
+            'decompression.completed',
+            'capsule.completed'
+          )
       `;
     });
   }

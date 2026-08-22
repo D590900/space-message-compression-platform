@@ -38,6 +38,10 @@ import {
 import { Database } from "./database.js";
 import { toWebRequest } from "./http-request.js";
 import {
+  JobOutboxPublisher,
+  type JobOutboxPublisherGateway,
+} from "./job-outbox-publisher.js";
+import {
   KeyRotationScheduler,
   type KeyRotationSchedulerGateway,
 } from "./key-rotation-scheduler.js";
@@ -66,6 +70,7 @@ export type AppDependencies = {
   webhookDispatcher: WebhookDispatcherGateway;
   metrics: ApiMetrics;
   rateLimiter: CostRateLimiterGateway;
+  jobOutboxPublisher: JobOutboxPublisherGateway;
 };
 
 function idempotencyKey(request: FastifyRequest): string {
@@ -84,10 +89,11 @@ export async function buildApp(
     overrides.database ??
     new Database(config.DATABASE_URL, config.IDENTIFIER_HMAC_SECRET);
   const clerk = overrides.clerk ?? new ProductionClerkGateway(config);
+  const queue = overrides.queue ?? new JobQueue(config.VALKEY_URL);
   const webhookSecretBox = new SecretBox(config.WEBHOOK_SECRET_ENCRYPTION_KEY);
   const dependencies: AppDependencies = {
     database,
-    queue: overrides.queue ?? new JobQueue(config.VALKEY_URL),
+    queue,
     storage: overrides.storage ?? new ObjectStorage(config),
     clerk,
     capsulePlanner:
@@ -114,9 +120,13 @@ export async function buildApp(
         config.CREDENTIAL_ROUTE_COST_PER_MINUTE,
         config.IDENTIFIER_HMAC_SECRET,
       ),
+    jobOutboxPublisher:
+      overrides.jobOutboxPublisher ??
+      new JobOutboxPublisher(database, queue, config.JOB_OUTBOX_POLL_MS),
   };
   dependencies.keyRotationScheduler.start();
   dependencies.webhookDispatcher.start();
+  dependencies.jobOutboxPublisher.start();
 
   const app = Fastify({
     logger: {
@@ -389,11 +399,6 @@ export async function buildApp(
       input,
     );
     if (result.created) {
-      await dependencies.queue.publishCapsule(
-        result.capsule.id,
-        principal.tenantSubject,
-        request.id,
-      );
       dependencies.metrics.recordJob("capsule");
     }
     return reply.status(202).send(result.capsule);
@@ -890,11 +895,6 @@ export async function buildApp(
       input,
     );
     if (result.created) {
-      await dependencies.queue.publishCompression(
-        result.job.id,
-        principal.tenantSubject,
-        request.id,
-      );
       dependencies.metrics.recordJob("compression");
     }
     return reply.status(202).send(result.job);
@@ -982,11 +982,6 @@ export async function buildApp(
       input,
     );
     if (result.created) {
-      await dependencies.queue.publishDecompression(
-        result.job.id,
-        principal.tenantSubject,
-        request.id,
-      );
       dependencies.metrics.recordJob("decompression");
     }
     return reply.status(202).send(result.job);
@@ -1032,6 +1027,7 @@ export async function buildApp(
       dependencies.queue.close(),
       dependencies.keyRotationScheduler.close(),
       dependencies.webhookDispatcher.close(),
+      dependencies.jobOutboxPublisher.close(),
       dependencies.rateLimiter.close(),
     ]);
   });

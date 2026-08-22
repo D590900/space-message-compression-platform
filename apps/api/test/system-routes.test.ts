@@ -179,7 +179,10 @@ describe("system capability routes", () => {
     };
     const listCodecCapabilities = vi.fn(() => Promise.resolve([]));
     const createCompressionJob = vi.fn(() =>
-      Promise.resolve({ created: true, job: { id: "job_session" } }),
+      Promise.resolve({
+        created: false,
+        job: { id: "job_session", status: "PENDING" },
+      }),
     );
     const auditApiKeyUsage = vi.fn(() => Promise.resolve());
     const database = {
@@ -192,7 +195,6 @@ describe("system capability routes", () => {
     const { app } = await buildApp(config, {
       database,
       queue: {
-        publishCompression: vi.fn(() => Promise.resolve("1-0")),
         close: () => Promise.resolve(),
       } as unknown as JobQueue,
       storage: {} as ObjectStorage,
