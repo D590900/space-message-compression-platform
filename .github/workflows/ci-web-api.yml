@@ -3,7 +3,7 @@ name: TypeScript
 on:
   pull_request:
   push:
-    branches: [main, feat/initial-platform]
+    branches: [main]
 
 permissions:
   contents: read
