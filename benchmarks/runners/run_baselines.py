@@ -221,8 +221,45 @@ def _write_csv(path: Path, attempts: list[dict[str, Any]]) -> None:
             writer.writerow(row)
 
 
+def _markdown_table(headers: list[str], rows: list[list[str]], numeric: set[int]) -> list[str]:
+    widths = [
+        max(len(headers[index]), *(len(row[index]) for row in rows))
+        for index in range(len(headers))
+    ]
+
+    def render(row: list[str]) -> str:
+        cells = [
+            value.rjust(widths[index]) if index in numeric else value.ljust(widths[index])
+            for index, value in enumerate(row)
+        ]
+        return "| " + " | ".join(cells) + " |"
+
+    separators = [
+        "-" * (width - 1) + ":" if index in numeric else "-" * width
+        for index, width in enumerate(widths)
+    ]
+    return [render(headers), render(separators), *(render(row) for row in rows)]
+
+
 def _write_markdown(path: Path, report: dict[str, Any]) -> None:
     attempts = report["attempts"]
+    table_rows: list[list[str]] = []
+    for item in attempts:
+        table_rows.append(
+            [
+                str(item["fixture"]),
+                str(item["codec_id"]),
+                str(item["level"]),
+                str(item["input_bytes"]),
+                str(item["output_payload_bytes"]) if item["success"] else "—",
+                f"{item['ratio']:.3f}" if item["success"] else "—",
+                f"{item['encode_ms']:.3f}" if item["success"] else "—",
+                f"{item['decode_ms']:.3f}" if item["success"] else "—",
+                ("pass" if item.get("quality_gate_passed") else "fail")
+                if item["success"]
+                else "unavailable/failure",
+            ]
+        )
     lines = [
         "# Generated CPU baseline report",
         "",
@@ -232,22 +269,22 @@ def _write_markdown(path: Path, report: dict[str, Any]) -> None:
         f"Platform: `{report['environment']['platform']}`  ",
         f"Generated (UTC): `{report['generated_at_utc']}`",
         "",
-        "| Fixture | Codec | Level | Input | Payload | Ratio | Encode ms | Decode ms | Gate |",
-        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+        *_markdown_table(
+            [
+                "Fixture",
+                "Codec",
+                "Level",
+                "Input",
+                "Payload",
+                "Ratio",
+                "Encode ms",
+                "Decode ms",
+                "Gate",
+            ],
+            table_rows,
+            {2, 3, 4, 5, 6, 7},
+        ),
     ]
-    for item in attempts:
-        if item["success"]:
-            lines.append(
-                f"| {item['fixture']} | {item['codec_id']} | {item['level']} | "
-                f"{item['input_bytes']} | {item['output_payload_bytes']} | {item['ratio']:.3f} | "
-                f"{item['encode_ms']:.3f} | {item['decode_ms']:.3f} | "
-                f"{'pass' if item['quality_gate_passed'] else 'fail'} |"
-            )
-        else:
-            lines.append(
-                f"| {item['fixture']} | {item['codec_id']} | {item['level']} | "
-                f"{item['input_bytes']} | — | — | — | — | unavailable/failure |"
-            )
     lines.extend(
         [
             "",
