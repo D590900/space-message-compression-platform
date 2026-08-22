@@ -2,6 +2,9 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "dist",
+    "paths": {
+      "@smcp/schemas": ["../../packages/schemas/src/index.ts"]
+    },
     "rootDir": "src",
     "types": ["node"]
   },
