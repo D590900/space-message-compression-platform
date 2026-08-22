@@ -1,0 +1,33 @@
+{
+  "name": "@smcp/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/server.ts",
+    "format:check": "prettier --check src test package.json tsconfig.json",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/server.js",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "3.1116.0",
+    "@aws-sdk/s3-request-presigner": "3.1116.0",
+    "@clerk/backend": "3.16.10",
+    "@fastify/rate-limit": "11.2.0",
+    "@smcp/schemas": "workspace:*",
+    "fastify": "5.12.1",
+    "ioredis": "6.0.0",
+    "postgres": "3.4.9",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.9",
+    "prettier": "3.6.2",
+    "tsx": "4.21.0",
+    "typescript": "7.0.2",
+    "vitest": "4.1.11"
+  }
+}
