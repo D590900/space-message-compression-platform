@@ -83,6 +83,31 @@ export type DecompressionJobRecord = {
   completed_at: Date | null;
 };
 
+export type CodecCapabilityRecord = {
+  id: string;
+  version: string;
+  content_type: ContentType;
+  implementation_sha256: string;
+  deterministic: boolean;
+  enabled: boolean;
+  disabled_reason: string | null;
+  capability: Record<string, unknown>;
+};
+
+export type ModelManifestRecord = {
+  id: string;
+  version: string;
+  source_uri: string;
+  code_commit: string;
+  weights_sha256: string;
+  config_sha256: string;
+  license_code: string;
+  license_weights: string;
+  input_contract: string;
+  decoder_image_digest: string;
+  enabled: boolean;
+};
+
 export class Database {
   private readonly sql;
 
@@ -102,6 +127,28 @@ export class Database {
   public async ready(): Promise<boolean> {
     await this.sql`SELECT 1`;
     return true;
+  }
+
+  public async listCodecCapabilities(): Promise<CodecCapabilityRecord[]> {
+    return this.sql<CodecCapabilityRecord[]>`
+      SELECT id, version, content_type,
+             encode(implementation_sha256, 'hex') AS implementation_sha256,
+             deterministic, enabled, disabled_reason, capability
+      FROM codec_registry
+      ORDER BY content_type, id, version
+    `;
+  }
+
+  public async listModelManifests(): Promise<ModelManifestRecord[]> {
+    return this.sql<ModelManifestRecord[]>`
+      SELECT id, version, source_uri, code_commit,
+             encode(weights_sha256, 'hex') AS weights_sha256,
+             encode(config_sha256, 'hex') AS config_sha256,
+             license_code, license_weights, input_contract,
+             decoder_image_digest, enabled
+      FROM model_registry
+      ORDER BY id, version
+    `;
   }
 
   public async createProject(
