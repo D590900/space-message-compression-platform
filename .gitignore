@@ -20,6 +20,7 @@ target/
 artifacts/
 benchmark-results/
 *.capsule
+!packages/test-vectors/**/*.capsule
 *.pem
 *.key
 *.p12
