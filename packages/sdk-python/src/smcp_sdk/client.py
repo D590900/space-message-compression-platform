@@ -62,6 +62,33 @@ class SmcpClient:
     def compression(self, resource_id: str) -> dict[str, Any]:
         return self._request("GET", f"v1/compressions/{quote(resource_id, safe='')}")
 
+    def compression_candidates(self, resource_id: str) -> dict[str, Any]:
+        return self._request(
+            "GET", f"v1/compressions/{quote(resource_id, safe='')}/candidates"
+        )
+
+    def cancel_compression(
+        self, resource_id: str, *, idempotency_key: str | None = None
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            f"v1/compressions/{quote(resource_id, safe='')}/cancel",
+            idempotency_key=idempotency_key,
+        )
+
+    def artifact_download(self, resource_id: str) -> dict[str, Any]:
+        return self._request(
+            "GET", f"v1/artifacts/{quote(resource_id, safe='')}/download"
+        )
+
+    def create_decompression(
+        self, payload: Mapping[str, object], *, idempotency_key: str | None = None
+    ) -> dict[str, Any]:
+        return self._request("POST", "v1/decompressions", payload, idempotency_key)
+
+    def decompression(self, resource_id: str) -> dict[str, Any]:
+        return self._request("GET", f"v1/decompressions/{quote(resource_id, safe='')}")
+
     def create_capsule_plan(
         self, payload: Mapping[str, object], *, idempotency_key: str | None = None
     ) -> dict[str, Any]:
@@ -72,8 +99,43 @@ class SmcpClient:
     ) -> dict[str, Any]:
         return self._request("POST", "v1/capsules", payload, idempotency_key)
 
+    def capsule_plan(self, resource_id: str) -> dict[str, Any]:
+        return self._request("GET", f"v1/capsule-plans/{quote(resource_id, safe='')}")
+
     def capsule(self, resource_id: str) -> dict[str, Any]:
         return self._request("GET", f"v1/capsules/{quote(resource_id, safe='')}")
+
+    def capsule_manifest(self, resource_id: str) -> dict[str, Any]:
+        return self._request(
+            "GET", f"v1/capsules/{quote(resource_id, safe='')}/manifest"
+        )
+
+    def capsule_download(self, resource_id: str) -> dict[str, Any]:
+        return self._request(
+            "GET", f"v1/capsules/{quote(resource_id, safe='')}/download"
+        )
+
+    def upload_presigned(
+        self,
+        upload_url: str,
+        required_headers: Mapping[str, str],
+        data: bytes,
+    ) -> None:
+        status, _, response = self.transport(
+            "PUT", upload_url, required_headers, data, self.timeout_seconds
+        )
+        if not 200 <= status < 300:
+            raise RuntimeError(
+                f"presigned upload failed with {status}: {response[:200]!r}"
+            )
+
+    def download_signed(self, download_url: str) -> bytes:
+        status, _, response = self.transport(
+            "GET", download_url, {}, None, self.timeout_seconds
+        )
+        if not 200 <= status < 300:
+            raise RuntimeError(f"signed download failed with {status}")
+        return response
 
     def verify_capsule(self, project_id: str, capsule_id: str) -> dict[str, Any]:
         return self._request(

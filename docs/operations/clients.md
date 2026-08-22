@@ -12,6 +12,17 @@ const smcp = new SmcpClient({
   apiKey: process.env.SMCP_API_KEY!,
 });
 
+const source = await smcp.presignUpload(
+  {
+    project_id: projectId,
+    filename: "message.txt",
+    content_type: "text/plain",
+    bytes: body.byteLength,
+  },
+  { idempotencyKey: "upload-message-2026-08-22" },
+);
+await smcp.uploadPresigned(source, body);
+
 const job = await smcp.createCompression(
   {
     project_id: projectId,
@@ -21,6 +32,9 @@ const job = await smcp.createCompression(
   },
   { idempotencyKey: "message-2026-08-22" },
 );
+
+const compressed = await smcp.artifactDownload(selectedArtifactId);
+const compressedBytes = await smcp.downloadSigned(compressed);
 ```
 
 ## Python
@@ -31,6 +45,16 @@ const job = await smcp.createCompression(
 from smcp_sdk import SmcpClient
 
 smcp = SmcpClient(api_url, api_key)
+source = smcp.presign_upload(
+    {
+        "project_id": project_id,
+        "filename": "message.txt",
+        "content_type": "text/plain",
+        "bytes": len(body),
+    },
+    idempotency_key="upload-message-2026-08-22",
+)
+smcp.upload_presigned(source["upload_url"], source["required_headers"], body)
 job = smcp.create_compression(
     {
         "project_id": project_id,
@@ -48,7 +72,23 @@ Build with `pnpm --filter @smcp/cli build`, then run `node apps/cli/dist/index.j
 
 ```console
 smcp codecs
+smcp upload:file --project "$PROJECT_ID" --file message.txt --content-type text/plain
 smcp compression:create --project "$PROJECT_ID" --source "$SOURCE_ID" --type TEXT --profile faithful
+smcp compression:get "$JOB_ID"
+smcp compression:candidates "$JOB_ID"
+smcp artifact:download "$ARTIFACT_ID" --output compressed.bin
+smcp decompression:create --project "$PROJECT_ID" --artifact "$ARTIFACT_ID"
+smcp decompression:get "$DECOMPRESSION_ID"
+smcp decompression:download "$DECOMPRESSION_ID" --output reconstructed.txt
 smcp capsule:plan --input capsule-plan.json
+smcp capsule:plan:get "$PLAN_ID"
 smcp capsule:create --project "$PROJECT_ID" --plan "$PLAN_ID" --pad false
+smcp capsule:get "$CAPSULE_ID"
+smcp capsule:manifest "$CAPSULE_ID"
+smcp capsule:download "$CAPSULE_ID" --output capsule.smcp
+smcp capsule:verify --project "$PROJECT_ID" --capsule "$CAPSULE_ID"
+smcp-capsule verify capsule.smcp
+smcp-capsule extract capsule.smcp --kind text --output text-stream.bin
 ```
+
+Download commands refuse to overwrite an existing output path and verify the SHA-256 supplied by the API when one is available. Signed storage transfers never attach the Clerk API key to the storage origin. Poll the corresponding `get` command until the asynchronous job is `COMPLETED`; clients do not hide retry or timeout policy behind an unbounded polling loop.
