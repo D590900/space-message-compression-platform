@@ -18,6 +18,8 @@
     "build": "tsc -p tsconfig.json",
     "format:check": "prettier --check src test package.json tsconfig.json",
     "lint": "tsc -p tsconfig.json --noEmit",
+    "openapi:check": "tsx src/generate-openapi.ts --check",
+    "openapi:generate": "tsx src/generate-openapi.ts",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
@@ -25,8 +27,11 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
+    "@types/node": "24.10.9",
     "prettier": "3.6.2",
+    "tsx": "4.21.0",
     "typescript": "7.0.2",
-    "vitest": "4.1.11"
+    "vitest": "4.1.11",
+    "yaml": "2.9.0"
   }
 }

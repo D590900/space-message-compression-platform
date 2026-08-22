@@ -69,7 +69,7 @@ The production images pin their base-image digests. Do not reuse the public Comp
    node apps/cli/dist/index.js codecs
    ```
 
-The exact request contracts and required scopes are in [`docs/api/openapi.yaml`](docs/api/openapi.yaml). Client examples are in [`docs/operations/clients.md`](docs/operations/clients.md).
+The exact request contracts and required scopes are in the generated [`docs/api/openapi.yaml`](docs/api/openapi.yaml). Its Zod request schemas and Fastify route inventory are checked against the code; change the template or schemas and run `pnpm openapi:generate`. Client examples are in [`docs/operations/clients.md`](docs/operations/clients.md).
 
 Stop and remove local state with:
 
