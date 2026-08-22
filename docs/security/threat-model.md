@@ -20,6 +20,7 @@ Assets include user identity, organization boundaries, API keys, private content
 - Do not download weights at build, import or request time.
 - Secret scanning and dependency review block merge.
 - FFmpeg runs against an allowlist with protocol/network access disabled, bounded probe/analyze sizes and isolated temporary directories.
+- Upload admission independently sniffs UTF-8 or allowlisted container magic, compares it with the declared MIME, requested content class and original filename extension, and then requires the bounded decoder probe to succeed.
 
 ## Retention and incident response
 

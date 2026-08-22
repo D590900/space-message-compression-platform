@@ -41,6 +41,7 @@ from smcp_worker.adapters.text import (
 )
 from smcp_worker.adapters.video import Av1VideoAdapter, generate_video_candidates
 from smcp_worker.capabilities import all_capabilities
+from smcp_worker.content_validation import validate_content
 from smcp_worker.models import EncodedCandidate, Profile, QualityReport, SourceObject
 from smcp_worker.observability import (
     CAPSULE_FILL_RATIO,
@@ -305,8 +306,12 @@ class CompressionWorker:
             if expected_digest is not None and bytes(expected_digest) != digest:
                 self._terminal_failure(connection, job, "HASH_MISMATCH")
                 return
-            INPUT_BYTES.labels(content_type=input_type).inc(len(source_bytes))
-            detected_mime = self._detected_mime(job["input_type"], job["declared_mime"])
+            validation = validate_content(
+                input_type,
+                str(job["declared_mime"]),
+                str(job["object_key"]),
+                source_bytes,
+            )
             connection.execute(
                 """
                 UPDATE source_objects
@@ -317,12 +322,17 @@ class CompressionWorker:
                 (
                     len(source_bytes),
                     digest,
-                    detected_mime,
+                    validation.detected_mime,
                     job["source_object_id"],
                     tenant_subject,
                 ),
             )
             connection.commit()
+
+            if validation.error_code is not None:
+                self._terminal_failure(connection, job, validation.error_code)
+                return
+            INPUT_BYTES.labels(content_type=input_type).inc(len(source_bytes))
 
             limit_error = self._media_limit_error(input_type, source_bytes)
             if limit_error is not None:
@@ -1010,12 +1020,6 @@ class CompressionWorker:
             else [candidate for candidate in candidates if candidate[1] <= target_bytes]
         )
         return min(eligible, key=lambda item: (item[1], item[0])) if eligible else None
-
-    @staticmethod
-    def _detected_mime(input_type: str, declared_mime: str) -> str:
-        if input_type == "TEXT":
-            return "text/plain"
-        return declared_mime
 
     def _media_limit_error(self, input_type: str, payload: bytes) -> str | None:
         if input_type == "TEXT":
