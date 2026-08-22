@@ -20,6 +20,10 @@ Operating-system scanners often associate every license present in a Debian sour
 
 `pathspec` lacks a machine-readable expression in the local development environment, but is a dev-only transitive dependency of tooling and is absent from the worker runtime image.
 
+### Dependency-review classifier exception
+
+GitHub dependency review currently reports `pkg:pypi/psycopg-binary@3.3.4` as `GPL-3.0-or-later`. The release's verified PyPI metadata declares [`LGPL-3.0-only`](https://pypi.org/project/psycopg-binary/3.3.4/), consistent with the [upstream Psycopg repository license](https://github.com/psycopg/psycopg/blob/3.3.4/LICENSE.txt). The workflow therefore contains an exact, version-pinned PURL exception for this package only. GPL and AGPL remain denied globally; any Psycopg version change requires re-auditing the package metadata and updating or removing the exception.
+
 ## Policy
 
 - Do not introduce GPL or AGPL application dependencies into distributed binaries without an explicit legal/architecture decision.
