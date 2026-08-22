@@ -46,11 +46,13 @@ def test_av1_decode_and_quality_gate(test_video: SourceObject) -> None:
         pytest.skip(capability.disabled_reason or "codec is disabled")
     prepared = adapter.preprocess(test_video, Profile.FAITHFUL)
     candidate = adapter.encode(prepared, EncodeParams(level=32))
+    candidate_again = adapter.encode(prepared, EncodeParams(level=32))
     decoded = adapter.decode(candidate)
     decoded_again = adapter.decode(candidate)
     report = adapter.measure(prepared, decoded)
 
     assert candidate.payload
+    assert candidate_again.payload == candidate.payload
     assert decoded_again == decoded
     assert report.quality_gate_passed
     assert report.metrics["classification"] == "GENERIC"
