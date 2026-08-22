@@ -1,3 +1,9 @@
+import {
+  context,
+  isSpanContextValid,
+  trace,
+  type Context,
+} from "@opentelemetry/api";
 import { Redis } from "ioredis";
 
 export class JobQueue {
@@ -19,6 +25,7 @@ export class JobQueue {
   public async publishCompression(
     jobId: string,
     tenantSubject: string,
+    requestId?: string,
   ): Promise<void> {
     if (this.redis.status === "wait") await this.redis.connect();
     await this.redis.xadd(
@@ -28,12 +35,14 @@ export class JobQueue {
       jobId,
       "tenant_subject",
       tenantSubject,
+      ...queueCorrelationFields(requestId),
     );
   }
 
   public async publishDecompression(
     jobId: string,
     tenantSubject: string,
+    requestId?: string,
   ): Promise<void> {
     if (this.redis.status === "wait") await this.redis.connect();
     await this.redis.xadd(
@@ -43,12 +52,14 @@ export class JobQueue {
       jobId,
       "tenant_subject",
       tenantSubject,
+      ...queueCorrelationFields(requestId),
     );
   }
 
   public async publishCapsule(
     capsuleId: string,
     tenantSubject: string,
+    requestId?: string,
   ): Promise<void> {
     if (this.redis.status === "wait") await this.redis.connect();
     await this.redis.xadd(
@@ -58,10 +69,29 @@ export class JobQueue {
       capsuleId,
       "tenant_subject",
       tenantSubject,
+      ...queueCorrelationFields(requestId),
     );
   }
 
   public async close(): Promise<void> {
     if (this.redis.status !== "end") await this.redis.quit();
   }
+}
+
+export function queueCorrelationFields(
+  requestId: string | undefined,
+  activeContext: Context = context.active(),
+): string[] {
+  const fields = requestId ? ["request_id", requestId] : [];
+  const spanContext = trace.getSpanContext(activeContext);
+  if (!spanContext || !isSpanContextValid(spanContext)) return fields;
+  fields.push(
+    "traceparent",
+    `00-${spanContext.traceId}-${spanContext.spanId}-${spanContext.traceFlags
+      .toString(16)
+      .padStart(2, "0")}`,
+  );
+  const traceState = spanContext.traceState?.serialize();
+  if (traceState) fields.push("tracestate", traceState);
+  return fields;
 }

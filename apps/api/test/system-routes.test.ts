@@ -103,5 +103,16 @@ describe("system capability routes", () => {
         },
       ],
     });
+
+    const rejected = await app.inject({ method: "GET", url: "/v1/models" });
+    expect(rejected.statusCode).toBe(401);
+
+    const metrics = await app.inject({ method: "GET", url: "/metrics" });
+    expect(metrics.statusCode).toBe(200);
+    expect(metrics.headers["content-type"]).toContain("text/plain");
+    expect(metrics.body).toContain("smcp_api_http_requests_total");
+    expect(metrics.body).toContain(
+      'api_key_verification_failures_total{reason="unauthorized"} 1',
+    );
   });
 });

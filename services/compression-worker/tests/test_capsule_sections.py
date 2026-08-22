@@ -42,9 +42,7 @@ def test_capsule_sections_are_binary_and_deterministic(tmp_path: Path) -> None:
         "index",
         "manifest-digest",
     ]
-    assert [path.read_bytes() for _, path in first] == [
-        path.read_bytes() for _, path in second
-    ]
+    assert [path.read_bytes() for _, path in first] == [path.read_bytes() for _, path in second]
     text = dict(first)["text"].read_bytes()
     assert text == bytes([len(payload)]) + payload
     index = dict(first)["index"].read_bytes()

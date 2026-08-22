@@ -65,4 +65,5 @@ RUN uv sync --frozen --no-dev \
     && chown -R smcp:smcp /opt/worker /opt/venv
 USER smcp
 ENV PATH=/opt/venv/bin:$PATH
+EXPOSE 8000
 CMD ["smcp-worker"]

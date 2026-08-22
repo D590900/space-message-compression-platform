@@ -6,6 +6,7 @@ import logging
 import struct
 import tempfile
 import time
+from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
 from types import ModuleType
@@ -15,6 +16,7 @@ from uuid import UUID, uuid4
 import boto3
 import psycopg
 from botocore.config import Config
+from opentelemetry import propagate, trace
 from psycopg.rows import dict_row
 from redis import Redis
 from redis.exceptions import ResponseError
@@ -38,12 +40,27 @@ from smcp_worker.adapters.text import (
 from smcp_worker.adapters.video import Av1VideoAdapter, generate_video_candidates
 from smcp_worker.capabilities import all_capabilities
 from smcp_worker.models import EncodedCandidate, Profile, QualityReport, SourceObject
+from smcp_worker.observability import (
+    CAPSULE_FILL_RATIO,
+    COMPRESSION_RATIO,
+    DECODE_DURATION,
+    ENCODE_DURATION,
+    INPUT_BYTES,
+    JOB_DURATION,
+    JOBS,
+    JOBS_FAILED,
+    OUTPUT_BYTES,
+    QUALITY_GATE_FAILURES,
+    QUEUE_DEPTH,
+    WORKER_OOM,
+)
 from smcp_worker.settings import Settings
 
 LOGGER = logging.getLogger(__name__)
 COMPRESSION_STREAM = "smcp:compression-jobs"
 DECOMPRESSION_STREAM = "smcp:decompression-jobs"
 CAPSULE_STREAM = "smcp:capsule-jobs"
+TRACER = trace.get_tracer("smcp.compression-worker")
 
 
 class CompressionWorker:
@@ -110,8 +127,10 @@ class CompressionWorker:
                 )
             connection.commit()
 
-    def run_forever(self) -> None:
+    def run_forever(self, on_ready: Callable[[], None] | None = None) -> None:
         self.ensure_groups()
+        if on_ready is not None:
+            on_ready()
         while True:
             messages = cast(
                 list[tuple[str, list[tuple[str, dict[str, str]]]]],
@@ -127,9 +146,22 @@ class CompressionWorker:
                     block=self.settings.worker_block_ms,
                 ),
             )
+            for queue in (COMPRESSION_STREAM, DECOMPRESSION_STREAM, CAPSULE_STREAM):
+                QUEUE_DEPTH.labels(queue=queue).set(self._queue_backlog(queue))
             for stream, entries in messages:
                 for message_id, fields in entries:
                     self.process_message(stream, message_id, fields)
+
+    def _queue_backlog(self, stream: str) -> float:
+        groups = cast(list[dict[str, Any]], self.redis.xinfo_groups(stream))
+        return self._group_backlog(groups, self.settings.worker_group)
+
+    @staticmethod
+    def _group_backlog(groups: list[dict[str, Any]], group_name: str) -> float:
+        for group in groups:
+            if group.get("name") == group_name:
+                return float(int(group.get("pending") or 0) + int(group.get("lag") or 0))
+        return 0.0
 
     def process_message(self, stream: str, message_id: str, fields: dict[str, str]) -> None:
         id_field = {
@@ -145,21 +177,47 @@ class CompressionWorker:
             LOGGER.error("rejecting malformed queue message", extra={"message_id": message_id})
             self.redis.xack(stream, self.settings.worker_group, message_id)
             return
-        try:
-            if stream == COMPRESSION_STREAM:
-                self.process_job(job_id, tenant_subject)
-            elif stream == DECOMPRESSION_STREAM:
-                self.process_decompression(job_id, tenant_subject)
-            elif stream == CAPSULE_STREAM:
-                self.process_capsule(job_id, tenant_subject)
+        job_type = {
+            COMPRESSION_STREAM: "compression",
+            DECOMPRESSION_STREAM: "decompression",
+            CAPSULE_STREAM: "capsule",
+        }[stream]
+        started = time.perf_counter()
+        parent_context = propagate.extract(fields)
+        with TRACER.start_as_current_span(
+            f"worker.{job_type}",
+            context=parent_context,
+            attributes={
+                "smcp.job.id": job_id,
+                "smcp.job.type": job_type,
+                "smcp.request.id": fields.get("request_id", "not_provided"),
+            },
+        ):
+            try:
+                if stream == COMPRESSION_STREAM:
+                    self.process_job(job_id, tenant_subject)
+                elif stream == DECOMPRESSION_STREAM:
+                    self.process_decompression(job_id, tenant_subject)
+                elif stream == CAPSULE_STREAM:
+                    self.process_capsule(job_id, tenant_subject)
+                else:
+                    raise ValueError("unknown worker stream")
+            except MemoryError:
+                WORKER_OOM.inc()
+                JOBS_FAILED.labels(job_type=job_type).inc()
+                JOBS.labels(job_type=job_type, outcome="oom").inc()
+                raise
+            except Exception:
+                JOBS_FAILED.labels(job_type=job_type).inc()
+                JOBS.labels(job_type=job_type, outcome="failed").inc()
+                LOGGER.exception("worker job failed", extra={"job_id": job_id, "stream": stream})
+                self._fail_job(stream, job_id, tenant_subject, "WORKER_FAILURE")
+                self.redis.xack(stream, self.settings.worker_group, message_id)
             else:
-                raise ValueError("unknown worker stream")
-        except Exception:
-            LOGGER.exception("worker job failed", extra={"job_id": job_id, "stream": stream})
-            self._fail_job(stream, job_id, tenant_subject, "WORKER_FAILURE")
-            self.redis.xack(stream, self.settings.worker_group, message_id)
-        else:
-            self.redis.xack(stream, self.settings.worker_group, message_id)
+                JOBS.labels(job_type=job_type, outcome="processed").inc()
+                self.redis.xack(stream, self.settings.worker_group, message_id)
+            finally:
+                JOB_DURATION.labels(job_type=job_type).observe(time.perf_counter() - started)
 
     def process_job(self, job_id: str, tenant_subject: str) -> None:
         with psycopg.connect(self.settings.database_url, row_factory=dict_row) as connection:
@@ -178,6 +236,7 @@ class CompressionWorker:
                 raise ValueError("job does not exist for tenant")
             if job["status"] in {"COMPLETED", "FAILED_TERMINAL", "CANCELLED"}:
                 return
+            input_type = str(job["input_type"])
             self._transition(connection, job_id, tenant_subject, "PENDING", "VALIDATING")
             response = self.s3.get_object(Bucket=self.settings.s3_bucket, Key=job["object_key"])
             source_bytes = response["Body"].read(self.settings.max_upload_bytes + 1)
@@ -192,6 +251,7 @@ class CompressionWorker:
             if expected_digest is not None and bytes(expected_digest) != digest:
                 self._terminal_failure(connection, job, "HASH_MISMATCH")
                 return
+            INPUT_BYTES.labels(content_type=input_type).inc(len(source_bytes))
             detected_mime = self._detected_mime(job["input_type"], job["declared_mime"])
             connection.execute(
                 """
@@ -214,12 +274,13 @@ class CompressionWorker:
             source = SourceObject(source_bytes, job["declared_mime"], job["object_key"])
             self._transition(connection, job_id, tenant_subject, "PREPROCESSING", "ENCODING")
             started = time.perf_counter_ns()
-            input_type = str(job["input_type"])
             candidates = self._generate_candidates(input_type, source, Profile(job["profile"]))
             if not candidates:
+                QUALITY_GATE_FAILURES.labels(content_type=input_type).inc()
                 self._terminal_failure(connection, job, "NO_QUALITY_GATED_CANDIDATE")
                 return
             encode_duration_ms = max(0, (time.perf_counter_ns() - started) // 1_000_000)
+            ENCODE_DURATION.labels(content_type=input_type).observe(encode_duration_ms / 1_000)
             self._transition(connection, job_id, tenant_subject, "ENCODING", "MEASURING")
 
             persisted: list[tuple[str, int, str]] = []
@@ -325,6 +386,10 @@ class CompressionWorker:
             self._transition(connection, job_id, tenant_subject, "MEASURING", "SELECTING")
             selected_id, selected_bytes, selected_key = min(
                 persisted, key=lambda item: (item[1], item[0])
+            )
+            OUTPUT_BYTES.labels(content_type=input_type).inc(selected_bytes)
+            COMPRESSION_RATIO.labels(content_type=input_type).observe(
+                len(source_bytes) / max(selected_bytes, 1)
             )
             connection.execute(
                 """
@@ -492,19 +557,16 @@ class CompressionWorker:
                     connection.rollback()
                     raise RuntimeError("capsule state changed before verification")
                 connection.commit()
-                verify_report = json.loads(
-                    run(("smcp-capsule", "verify", str(output))).stdout
-                )
+                verify_report = json.loads(run(("smcp-capsule", "verify", str(output))).stdout)
                 encoded = output.read_bytes()
 
             if not verify_report.get("valid"):
                 raise ValueError("capsule verifier rejected output")
+            CAPSULE_FILL_RATIO.observe(len(encoded) / max(int(capsule["budget_bytes"]), 1))
             digest = hashlib.sha256(encoded).hexdigest()
             if digest != build_report.get("sha256"):
                 raise ValueError("capsule build digest mismatch")
-            object_key = (
-                f"{tenant_subject}/{capsule['project_id']}/capsules/{capsule_id}.smcp"
-            )
+            object_key = f"{tenant_subject}/{capsule['project_id']}/capsules/{capsule_id}.smcp"
             self.s3.put_object(
                 Bucket=self.settings.s3_bucket,
                 Key=object_key,
@@ -623,9 +685,7 @@ class CompressionWorker:
         payloads: list[tuple[dict[str, Any], dict[str, Any], bytes]],
     ) -> list[tuple[str, Path]]:
         root.mkdir(parents=True, exist_ok=True)
-        codecs = sorted(
-            {(row[1]["codec_id"], row[1]["codec_version"]) for row in payloads}
-        )
+        codecs = sorted({(row[1]["codec_id"], row[1]["codec_version"]) for row in payloads})
         registry = bytearray(CompressionWorker._varint(len(codecs)))
         for codec_id, version in codecs:
             registry.extend(CompressionWorker._length_prefixed(codec_id.encode()))
@@ -750,6 +810,7 @@ class CompressionWorker:
                 config={"dictionary_sha256": None},
                 payload=payload,
             )
+            decode_started = time.perf_counter()
             if candidate.codec_id == "text.brotli":
                 decoded = BrotliTextAdapter().decode(candidate)
             elif candidate.codec_id == "text.zstandard":
@@ -767,6 +828,9 @@ class CompressionWorker:
                     connection, decompression_id, tenant_subject, "DECODER_UNAVAILABLE"
                 )
                 return
+            DECODE_DURATION.labels(codec_id=candidate.codec_id).observe(
+                time.perf_counter() - decode_started
+            )
 
             connection.execute(
                 """

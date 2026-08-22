@@ -37,6 +37,7 @@ import {
   type KeyRotationSchedulerGateway,
 } from "./key-rotation-scheduler.js";
 import { ApiProblem, registerProblemHandler } from "./problem.js";
+import { ApiMetrics, authorizeMetrics } from "./metrics.js";
 import { JobQueue } from "./queue.js";
 import { SecretBox } from "./secret-box.js";
 import { ObjectStorage } from "./storage.js";
@@ -54,6 +55,7 @@ export type AppDependencies = {
   capsulePlanner: CapsulePlannerGateway;
   keyRotationScheduler: KeyRotationSchedulerGateway;
   webhookDispatcher: WebhookDispatcherGateway;
+  metrics: ApiMetrics;
 };
 
 function idempotencyKey(request: FastifyRequest): string {
@@ -91,6 +93,7 @@ export async function buildApp(
         config.WEBHOOK_MAX_ATTEMPTS,
         config.WEBHOOK_TIMEOUT_MS,
       ),
+    metrics: overrides.metrics ?? new ApiMetrics(),
   };
   dependencies.keyRotationScheduler.start();
   dependencies.webhookDispatcher.start();
@@ -112,6 +115,18 @@ export async function buildApp(
       request.headers.authorization?.slice(-24) ?? request.ip,
   });
 
+  const requestStarts = new WeakMap<FastifyRequest, bigint>();
+  app.addHook("onRequest", async (request) => {
+    requestStarts.set(request, process.hrtime.bigint());
+  });
+  app.addHook("onResponse", async (request, reply) => {
+    dependencies.metrics.observeRequest(
+      request,
+      reply.statusCode,
+      requestStarts.get(request) ?? process.hrtime.bigint(),
+    );
+  });
+
   app.setErrorHandler((error, request, reply) =>
     registerProblemHandler(request, reply, error),
   );
@@ -129,8 +144,33 @@ export async function buildApp(
     }
   });
 
-  const apiPrincipal = async (request: FastifyRequest, scope: ApiScope) =>
-    requireApiKey(dependencies.clerk, request.headers.authorization, scope);
+  app.get("/metrics", async (request, reply) => {
+    if (!authorizeMetrics(request, config)) {
+      throw new ApiProblem(
+        401,
+        "Metrics authentication required",
+        "urn:smcp:problem:unauthorized",
+      );
+    }
+    return reply
+      .type(dependencies.metrics.registry.contentType)
+      .send(await dependencies.metrics.registry.metrics());
+  });
+
+  const apiPrincipal = async (request: FastifyRequest, scope: ApiScope) => {
+    try {
+      return await requireApiKey(
+        dependencies.clerk,
+        request.headers.authorization,
+        scope,
+      );
+    } catch (error) {
+      dependencies.metrics.recordApiKeyFailure(
+        error instanceof ApiProblem ? error.type : "unknown",
+      );
+      throw error;
+    }
+  };
 
   app.get("/v1/codecs", async (request) => {
     await apiPrincipal(request, "codecs:read");
@@ -188,6 +228,7 @@ export async function buildApp(
         }),
       })),
     });
+    dependencies.metrics.recordPlannerIteration(plannerResult.solver);
     const byCandidate = new Map(
       candidates.map((candidate) => [candidate.candidate_id, candidate]),
     );
@@ -242,7 +283,9 @@ export async function buildApp(
       await dependencies.queue.publishCapsule(
         result.capsule.id,
         principal.tenantSubject,
+        request.id,
       );
+      dependencies.metrics.recordJob("capsule");
     }
     return reply.status(202).send(result.capsule);
   });
@@ -609,7 +652,9 @@ export async function buildApp(
       await dependencies.queue.publishCompression(
         result.job.id,
         principal.tenantSubject,
+        request.id,
       );
+      dependencies.metrics.recordJob("compression");
     }
     return reply.status(202).send(result.job);
   });
@@ -664,7 +709,9 @@ export async function buildApp(
       await dependencies.queue.publishDecompression(
         result.job.id,
         principal.tenantSubject,
+        request.id,
       );
+      dependencies.metrics.recordJob("decompression");
     }
     return reply.status(202).send(result.job);
   });
