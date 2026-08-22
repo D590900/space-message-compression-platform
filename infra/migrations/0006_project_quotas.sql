@@ -1,5 +1,3 @@
-BEGIN;
-
 CREATE TABLE project_quotas (
   tenant_subject text NOT NULL,
   project_id uuid NOT NULL,
@@ -15,5 +13,3 @@ CREATE TABLE project_quotas (
 INSERT INTO project_quotas (tenant_subject, project_id)
 SELECT tenant_subject, id FROM projects
 ON CONFLICT DO NOTHING;
-
-COMMIT;

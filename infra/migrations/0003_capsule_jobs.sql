@@ -1,5 +1,3 @@
-BEGIN;
-
 ALTER TABLE capsule_plans
   ADD COLUMN idempotency_key text,
   ADD COLUMN request_fingerprint bytea
@@ -28,5 +26,3 @@ ALTER TABLE capsules
 CREATE UNIQUE INDEX capsules_idempotency_idx
   ON capsules (tenant_subject, project_id, idempotency_key)
   WHERE idempotency_key IS NOT NULL;
-
-COMMIT;
