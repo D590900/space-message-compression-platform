@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "../src/app.js";
 import type { ClerkGateway, ManagedApiKey } from "../src/auth.js";
@@ -34,7 +34,7 @@ const managedKey: ManagedApiKey = {
   id: "apikey_test",
   name: "test",
   subject: "org_test",
-  scopes: ["codecs:read"],
+  scopes: ["codecs:read", "jobs:create"],
   claims: { smcp_issued: true },
   createdBy: "user_test",
   description: null,
@@ -60,6 +60,7 @@ describe("system capability routes", () => {
   });
 
   it("returns enabled and disabled codecs only with codecs:read", async () => {
+    const createCompressionJob = vi.fn();
     const database = {
       listCodecCapabilities: () =>
         Promise.resolve([
@@ -84,6 +85,7 @@ describe("system capability routes", () => {
             capability: { install_hint: "install from an immutable manifest" },
           },
         ]),
+      createCompressionJob,
       close: () => Promise.resolve(),
     } as unknown as Database;
     const queue = { close: () => Promise.resolve() } as unknown as JobQueue;
@@ -126,5 +128,25 @@ describe("system capability routes", () => {
     expect(metrics.body).toContain(
       'api_key_verification_failures_total{reason="unauthorized"} 1',
     );
+
+    const semantic = await app.inject({
+      method: "POST",
+      url: "/v1/compressions",
+      headers: {
+        authorization: "Bearer test-key",
+        "idempotency-key": "semantic-profile-0001",
+      },
+      payload: {
+        project_id: "85bd5e09-a8fb-4d2c-a560-5d2365badf84",
+        source_object_id: "2d0610bd-4567-41ab-9a7a-8a5fd320c7ce",
+        input_type: "TEXT",
+        profile: "semantic",
+      },
+    });
+    expect(semantic.statusCode).toBe(422);
+    expect(semantic.json()).toMatchObject({
+      type: "urn:smcp:problem:semantic-profile-unavailable",
+    });
+    expect(createCompressionJob).not.toHaveBeenCalled();
   });
 });

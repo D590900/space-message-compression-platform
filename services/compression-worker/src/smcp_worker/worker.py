@@ -289,6 +289,9 @@ class CompressionWorker:
                 connection, job
             ):
                 return
+            if Profile(job["profile"]) == Profile.SEMANTIC:
+                self._terminal_failure(connection, job, "SEMANTIC_PROFILE_UNAVAILABLE")
+                return
             input_type = str(job["input_type"])
             self._transition(connection, job_id, tenant_subject, "PENDING", "VALIDATING")
             response = self.s3.get_object(Bucket=self.settings.s3_bucket, Key=job["object_key"])
