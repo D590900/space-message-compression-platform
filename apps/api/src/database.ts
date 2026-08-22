@@ -185,6 +185,19 @@ export type WebhookDeliveryClaim = {
   secret_ciphertext: Buffer;
 };
 
+export type ProjectUsageRecord = {
+  project_id: string;
+  period_start: Date;
+  counters: Record<string, number>;
+  active_jobs: number;
+  quotas: {
+    max_monthly_input_bytes: number;
+    max_monthly_jobs: number;
+    max_concurrent_jobs: number;
+    max_monthly_capsules: number;
+  };
+};
+
 export class Database {
   private readonly sql;
 
@@ -400,6 +413,33 @@ export class Database {
           "urn:smcp:problem:not-found",
         );
       }
+      await transaction`
+        SELECT pg_advisory_xact_lock(
+          hashtextextended(${`${tenantSubject}:${input.project_id}`}, 0)
+        )
+      `;
+      const quota = await transaction<
+        { max_monthly_capsules: number; used_capsules: number }[]
+      >`
+        SELECT q.max_monthly_capsules,
+               COALESCE(u.value, 0) AS used_capsules
+        FROM project_quotas q
+        LEFT JOIN usage_counters u
+          ON u.tenant_subject = q.tenant_subject
+         AND u.project_id = q.project_id
+         AND u.period_start = date_trunc('month', now())
+         AND u.metric = 'capsules'
+        WHERE q.tenant_subject = ${tenantSubject} AND q.project_id = ${input.project_id}
+      `;
+      if (
+        !quota[0] ||
+        Number(quota[0].used_capsules) >= Number(quota[0].max_monthly_capsules)
+      )
+        throw new ApiProblem(
+          429,
+          "Project monthly capsule quota exceeded",
+          "urn:smcp:problem:quota-exceeded",
+        );
       const id = randomUUID();
       const buildOptions = {
         ecc_percent: Number(plan.ecc_percent),
@@ -418,6 +458,16 @@ export class Database {
                   actual_bytes, object_key, NULL::text AS sha256_hex,
                   NULL::text AS merkle_root_hex, format_major, format_minor,
                   status, error_code, build_options, created_at, completed_at
+      `;
+      await transaction`
+        INSERT INTO usage_counters (
+          tenant_subject, project_id, period_start, metric, value
+        ) VALUES (
+          ${tenantSubject}, ${input.project_id}, date_trunc('month', now()),
+          'capsules', 1
+        )
+        ON CONFLICT (tenant_subject, project_id, period_start, metric)
+        DO UPDATE SET value = usage_counters.value + 1
       `;
       await transaction`
         INSERT INTO outbox_events (
@@ -511,6 +561,10 @@ export class Database {
         RETURNING id, tenant_subject, name, created_at
       `;
       await transaction`
+        INSERT INTO project_quotas (tenant_subject, project_id)
+        VALUES (${tenantSubject}, ${id})
+      `;
+      await transaction`
         INSERT INTO audit_events (
           tenant_subject, project_id, actor_subject, action, resource_type,
           resource_id, request_id, outcome
@@ -560,6 +614,35 @@ export class Database {
           );
         return { source: previous[0], created: false };
       }
+      await transaction`
+        SELECT pg_advisory_xact_lock(
+          hashtextextended(${`${tenantSubject}:${input.project_id}`}, 0)
+        )
+      `;
+      const quota = await transaction<
+        { max_monthly_input_bytes: number; used_bytes: number }[]
+      >`
+        SELECT q.max_monthly_input_bytes,
+               COALESCE(u.value, 0) AS used_bytes
+        FROM project_quotas q
+        LEFT JOIN usage_counters u
+          ON u.tenant_subject = q.tenant_subject
+         AND u.project_id = q.project_id
+         AND u.period_start = date_trunc('month', now())
+         AND u.metric = 'input_bytes'
+        WHERE q.tenant_subject = ${tenantSubject} AND q.project_id = ${input.project_id}
+      `;
+      if (
+        !quota[0] ||
+        Number(quota[0].used_bytes) + input.bytes >
+          Number(quota[0].max_monthly_input_bytes)
+      ) {
+        throw new ApiProblem(
+          429,
+          "Project monthly input-byte quota exceeded",
+          "urn:smcp:problem:quota-exceeded",
+        );
+      }
       const id = randomUUID();
       const rows = await transaction<SourceObjectRecord[]>`
         INSERT INTO source_objects (
@@ -574,6 +657,16 @@ export class Database {
         )
         RETURNING id, tenant_subject, project_id, object_key, declared_mime,
                   expected_bytes, upload_expires_at
+      `;
+      await transaction`
+        INSERT INTO usage_counters (
+          tenant_subject, project_id, period_start, metric, value
+        ) VALUES (
+          ${tenantSubject}, ${input.project_id}, date_trunc('month', now()),
+          'input_bytes', ${input.bytes}
+        )
+        ON CONFLICT (tenant_subject, project_id, period_start, metric)
+        DO UPDATE SET value = usage_counters.value + EXCLUDED.value
       `;
       await transaction`
         INSERT INTO audit_events (
@@ -736,6 +829,49 @@ export class Database {
         );
       }
 
+      await transaction`
+        SELECT pg_advisory_xact_lock(
+          hashtextextended(${`${tenantSubject}:${input.project_id}`}, 0)
+        )
+      `;
+      const quota = await transaction<
+        {
+          max_monthly_jobs: number;
+          max_concurrent_jobs: number;
+          used_jobs: number;
+          active_jobs: number;
+        }[]
+      >`
+        SELECT q.max_monthly_jobs, q.max_concurrent_jobs,
+               COALESCE(u.value, 0) AS used_jobs,
+               (SELECT count(*) FROM compression_jobs active
+                WHERE active.tenant_subject = q.tenant_subject
+                  AND active.project_id = q.project_id
+                  AND active.status NOT IN ('COMPLETED', 'FAILED_TERMINAL', 'CANCELLED')) AS active_jobs
+        FROM project_quotas q
+        LEFT JOIN usage_counters u
+          ON u.tenant_subject = q.tenant_subject
+         AND u.project_id = q.project_id
+         AND u.period_start = date_trunc('month', now())
+         AND u.metric = 'compression_jobs'
+        WHERE q.tenant_subject = ${tenantSubject} AND q.project_id = ${input.project_id}
+      `;
+      if (
+        !quota[0] ||
+        Number(quota[0].used_jobs) >= Number(quota[0].max_monthly_jobs)
+      )
+        throw new ApiProblem(
+          429,
+          "Project monthly compression-job quota exceeded",
+          "urn:smcp:problem:quota-exceeded",
+        );
+      if (Number(quota[0].active_jobs) >= Number(quota[0].max_concurrent_jobs))
+        throw new ApiProblem(
+          429,
+          "Project concurrent compression-job quota exceeded",
+          "urn:smcp:problem:quota-exceeded",
+        );
+
       const id = randomUUID();
       const rows = await transaction<CompressionJobRecord[]>`
         INSERT INTO compression_jobs (
@@ -748,6 +884,16 @@ export class Database {
         RETURNING id, tenant_subject, project_id, input_type, profile, target_bytes,
                   status, source_object_id, selected_candidate_id, requested_at,
                   completed_at, error_code
+      `;
+      await transaction`
+        INSERT INTO usage_counters (
+          tenant_subject, project_id, period_start, metric, value
+        ) VALUES (
+          ${tenantSubject}, ${input.project_id}, date_trunc('month', now()),
+          'compression_jobs', 1
+        )
+        ON CONFLICT (tenant_subject, project_id, period_start, metric)
+        DO UPDATE SET value = usage_counters.value + 1
       `;
       await transaction`
         INSERT INTO outbox_events (
@@ -931,6 +1077,60 @@ export class Database {
         "urn:smcp:problem:not-found",
       );
     return rows[0];
+  }
+
+  public async getProjectUsage(
+    tenantSubject: string,
+    projectId: string,
+  ): Promise<ProjectUsageRecord> {
+    const rows = await this.sql<
+      {
+        period_start: Date;
+        counters: Record<string, number>;
+        active_jobs: number;
+        max_monthly_input_bytes: number;
+        max_monthly_jobs: number;
+        max_concurrent_jobs: number;
+        max_monthly_capsules: number;
+      }[]
+    >`
+      SELECT date_trunc('month', now()) AS period_start,
+             COALESCE(
+               (SELECT jsonb_object_agg(metric, value)
+                FROM usage_counters u
+                WHERE u.tenant_subject = q.tenant_subject
+                  AND u.project_id = q.project_id
+                  AND u.period_start = date_trunc('month', now())),
+               '{}'::jsonb
+             ) AS counters,
+             (SELECT count(*) FROM compression_jobs active
+              WHERE active.tenant_subject = q.tenant_subject
+                AND active.project_id = q.project_id
+                AND active.status NOT IN ('COMPLETED', 'FAILED_TERMINAL', 'CANCELLED')) AS active_jobs,
+             q.max_monthly_input_bytes, q.max_monthly_jobs,
+             q.max_concurrent_jobs, q.max_monthly_capsules
+      FROM project_quotas q
+      WHERE q.tenant_subject = ${tenantSubject} AND q.project_id = ${projectId}
+    `;
+    const row = rows[0];
+    if (!row)
+      throw new ApiProblem(
+        404,
+        "Project not found",
+        "urn:smcp:problem:not-found",
+      );
+    return {
+      project_id: projectId,
+      period_start: row.period_start,
+      counters: row.counters,
+      active_jobs: Number(row.active_jobs),
+      quotas: {
+        max_monthly_input_bytes: Number(row.max_monthly_input_bytes),
+        max_monthly_jobs: Number(row.max_monthly_jobs),
+        max_concurrent_jobs: Number(row.max_concurrent_jobs),
+        max_monthly_capsules: Number(row.max_monthly_capsules),
+      },
+    };
   }
 
   public async createWebhookEndpoint(

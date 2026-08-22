@@ -22,6 +22,12 @@ Buckets must be private, encrypted and deny anonymous listing. Signed URLs defau
 
 The local MinIO service uses a Compose-only static KMS key so `AES256` SSE-S3 writes are tested end to end. That key is public development configuration and must never be reused outside the local stack. Production storage must use a managed KMS and independently controlled key rotation.
 
+## Quotas and usage
+
+Every project receives hard monthly limits for input bytes, compression jobs and capsule builds, plus a concurrent compression-job limit. Presign, compression and capsule creation acquire a project-scoped PostgreSQL advisory lock, check current counters, and increment usage in the same transaction as the accepted resource. Idempotent replays return the original resource without charging twice; rejected requests return Problem Details with status `429` and type `urn:smcp:problem:quota-exceeded`.
+
+`GET /v1/projects/{id}/usage` requires `jobs:read` and returns the current UTC calendar-month counters, active job count and configured limits. The initial migration defaults are 10 GiB input, 10,000 compression jobs, 100 concurrent jobs and 1,000 capsules per project per month. Operators should set plan-specific values through controlled database administration until the billing/admin surface is introduced.
+
 ## Capsule runtime
 
 Both API and worker production images contain the same release-built `smcp-capsule` binary. The API invokes its planner with argv-only process execution; the worker constructs binary sections in a private temporary directory, builds atomically, invokes the Rust verifier, and uploads only verified output. Capsule failures are terminal and do not stop the worker from consuming unrelated jobs.

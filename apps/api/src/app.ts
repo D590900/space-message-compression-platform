@@ -344,6 +344,12 @@ export async function buildApp(
     return reply.status(result.created ? 201 : 200).send(result.project);
   });
 
+  app.get("/v1/projects/:id/usage", async (request) => {
+    const principal = await apiPrincipal(request, "jobs:read");
+    const { id } = resourceIdParamsSchema.parse(request.params);
+    return dependencies.database.getProjectUsage(principal.tenantSubject, id);
+  });
+
   app.get("/v1/api-keys", async (request) => {
     const session = await requireSession(
       dependencies.clerk,
