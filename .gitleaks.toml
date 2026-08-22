@@ -13,5 +13,6 @@ regexes = ['''^\s*(?:WEBHOOK_SECRET_ENCRYPTION_KEY:\s*|const encryptionKey = )"M
 paths = [
   '''^apps/api/test/system-routes\.test\.ts$''',
   '''^apps/api/test/capsule-plan\.test\.ts$''',
+  '''^apps/api/test/api-key-routes\.test\.ts$''',
   '''^apps/api/test/webhook-security\.test\.ts$''',
 ]
