@@ -4,6 +4,7 @@ import {
   type ClerkGateway,
   type ManagedApiKey,
   requireApiKey,
+  requireOrganizationAdmin,
 } from "../src/auth.js";
 
 function managedKey(overrides: Partial<ManagedApiKey> = {}): ManagedApiKey {
@@ -109,6 +110,27 @@ describe("API-key policy", () => {
     ).rejects.toMatchObject({
       status: 401,
       type: "urn:smcp:problem:invalid-api-key",
+    });
+  });
+
+  it("restricts administrative dashboard operations to Clerk org admins", () => {
+    const base = {
+      kind: "session" as const,
+      tenantSubject: "org_test",
+      actorSubject: "user_test",
+    };
+    expect(
+      requireOrganizationAdmin({ ...base, organizationRole: "org:admin" }),
+    ).toMatchObject({ actorSubject: "user_test" });
+    let error: unknown;
+    try {
+      requireOrganizationAdmin({ ...base, organizationRole: "org:member" });
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toMatchObject({
+      status: 403,
+      type: "urn:smcp:problem:organization-admin-required",
     });
   });
 });

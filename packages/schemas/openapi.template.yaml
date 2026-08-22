@@ -69,6 +69,7 @@ paths:
       tags: [API keys]
       operationId: listApiKeys
       x-dashboard-session-only: true
+      x-required-org-role: org:admin
       responses:
         "200": { description: Non-secret API-key metadata }
         "401": { $ref: "#/components/responses/Problem" }
@@ -77,6 +78,7 @@ paths:
       tags: [API keys]
       operationId: createApiKey
       x-dashboard-session-only: true
+      x-required-org-role: org:admin
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -107,6 +109,7 @@ paths:
       tags: [Projects]
       operationId: updateProjectSettings
       x-dashboard-session-only: true
+      x-required-org-role: org:admin
       parameters: [{ $ref: "#/components/parameters/ResourceId" }]
       requestBody:
         required: true
@@ -123,6 +126,7 @@ paths:
       tags: [API keys]
       operationId: rotateApiKey
       x-dashboard-session-only: true
+      x-required-org-role: org:admin
       parameters:
         - $ref: "#/components/parameters/ApiKeyId"
         - $ref: "#/components/parameters/IdempotencyKey"
@@ -144,6 +148,7 @@ paths:
       tags: [API keys]
       operationId: revokeApiKey
       x-dashboard-session-only: true
+      x-required-org-role: org:admin
       parameters: [{ $ref: "#/components/parameters/ApiKeyId" }]
       responses:
         "204": { description: Revoked }

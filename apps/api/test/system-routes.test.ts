@@ -170,6 +170,7 @@ describe("system capability routes", () => {
         kind: "session" as const,
         tenantSubject: "org_dashboard",
         actorSubject: "user_dashboard",
+        organizationRole: "org:admin",
       }),
     );
     const sessionClerk = {
@@ -258,6 +259,7 @@ describe("system capability routes", () => {
           kind: "session" as const,
           tenantSubject: "org_dashboard",
           actorSubject: "user_dashboard",
+          organizationRole: "org:admin",
         }),
     };
     const listProjects = vi.fn(() =>
