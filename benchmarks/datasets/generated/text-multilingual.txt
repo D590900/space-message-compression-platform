@@ -1,0 +1,3 @@
+Earth · Terra · Земля · الأرض · पृथ्वी · 地球 · 지구
+Sequence: 0001 0001 0010 0011 0101 1000 1101
+Symbols: ΔT=-12.5 °C; integrity=sha256; status=✓

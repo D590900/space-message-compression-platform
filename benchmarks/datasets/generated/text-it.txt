@@ -1,0 +1,1 @@
+Il pacchetto telemetrico 590900 segnala controllo termico nominale, alimentazione stabile e indice della capsula verificato.
