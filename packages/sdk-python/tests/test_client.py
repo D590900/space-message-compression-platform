@@ -57,3 +57,36 @@ def test_problem_details_is_typed() -> None:
     assert raised.value.status == 429
     assert raised.value.type == "urn:smcp:problem:quota-exceeded"
     assert raised.value.request_id == "request_1"
+
+
+def test_signed_storage_transfers_do_not_add_api_credentials() -> None:
+    calls: list[tuple[str, str, Mapping[str, str], bytes | None]] = []
+
+    def transport(
+        method: str,
+        url: str,
+        headers: Mapping[str, str],
+        body: bytes | None,
+        _timeout: float,
+    ) -> tuple[int, Mapping[str, str], bytes]:
+        calls.append((method, url, headers, body))
+        return 200, {}, b"downloaded" if method == "GET" else b""
+
+    client = SmcpClient("https://api.example.com", "smcp_secret", transport=transport)
+    client.upload_presigned(
+        "https://storage.example.com/upload",
+        {"content-type": "text/plain"},
+        b"payload",
+    )
+    downloaded = client.download_signed("https://storage.example.com/download")
+
+    assert downloaded == b"downloaded"
+    assert calls == [
+        (
+            "PUT",
+            "https://storage.example.com/upload",
+            {"content-type": "text/plain"},
+            b"payload",
+        ),
+        ("GET", "https://storage.example.com/download", {}, None),
+    ]

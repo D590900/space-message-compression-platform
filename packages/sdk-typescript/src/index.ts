@@ -36,6 +36,21 @@ export type WebhookCreate = {
   )[];
 };
 
+export type PresignedUpload = {
+  source_object_id: string;
+  upload_url: string;
+  method: "PUT";
+  required_headers: Record<string, string>;
+  expires_at: string;
+};
+
+export type SignedDownload = {
+  download_url: string;
+  sha256?: string | null;
+  bytes?: number | null;
+  expires_in_seconds: number;
+};
+
 export class SmcpProblem extends Error {
   public constructor(
     public readonly status: number,
@@ -71,8 +86,23 @@ export class SmcpClient {
   public presignUpload(
     input: Record<string, unknown>,
     options?: RequestOptions,
-  ): Promise<Record<string, unknown>> {
+  ): Promise<PresignedUpload> {
     return this.request("POST", "v1/uploads/presign", input, options);
+  }
+
+  public async uploadPresigned(
+    upload: Pick<PresignedUpload, "upload_url" | "required_headers">,
+    body: BodyInit,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const response = await this.fetchImplementation(upload.upload_url, {
+      method: "PUT",
+      headers: upload.required_headers,
+      body,
+      ...(signal ? { signal } : {}),
+    });
+    if (!response.ok)
+      throw new Error(`presigned upload failed with ${response.status}`);
   }
 
   public createCompression(
@@ -108,6 +138,30 @@ export class SmcpClient {
     );
   }
 
+  public cancelCompression(
+    id: string,
+    options?: RequestOptions,
+  ): Promise<Record<string, unknown>> {
+    return this.request(
+      "POST",
+      `v1/compressions/${encodeURIComponent(id)}/cancel`,
+      undefined,
+      options,
+    );
+  }
+
+  public artifactDownload(
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<SignedDownload> {
+    return this.request(
+      "GET",
+      `v1/artifacts/${encodeURIComponent(id)}/download`,
+      undefined,
+      { signal },
+    );
+  }
+
   public createDecompression(
     input: { project_id: string; artifact_id: string },
     options?: RequestOptions,
@@ -115,11 +169,35 @@ export class SmcpClient {
     return this.request("POST", "v1/decompressions", input, options);
   }
 
+  public decompression(
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<Record<string, unknown> & { download_url?: string }> {
+    return this.request(
+      "GET",
+      `v1/decompressions/${encodeURIComponent(id)}`,
+      undefined,
+      { signal },
+    );
+  }
+
   public createCapsulePlan(
     input: CapsulePlanCreate,
     options?: RequestOptions,
   ): Promise<Record<string, unknown>> {
     return this.request("POST", "v1/capsule-plans", input, options);
+  }
+
+  public capsulePlan(
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<Record<string, unknown>> {
+    return this.request(
+      "GET",
+      `v1/capsule-plans/${encodeURIComponent(id)}`,
+      undefined,
+      { signal },
+    );
   }
 
   public createCapsule(
@@ -141,6 +219,42 @@ export class SmcpClient {
         signal,
       },
     );
+  }
+
+  public capsuleManifest(
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<Record<string, unknown>> {
+    return this.request(
+      "GET",
+      `v1/capsules/${encodeURIComponent(id)}/manifest`,
+      undefined,
+      { signal },
+    );
+  }
+
+  public capsuleDownload(
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<SignedDownload> {
+    return this.request(
+      "GET",
+      `v1/capsules/${encodeURIComponent(id)}/download`,
+      undefined,
+      { signal },
+    );
+  }
+
+  public async downloadSigned(
+    download: Pick<SignedDownload, "download_url">,
+    signal?: AbortSignal,
+  ): Promise<Uint8Array> {
+    const response = await this.fetchImplementation(download.download_url, {
+      ...(signal ? { signal } : {}),
+    });
+    if (!response.ok)
+      throw new Error(`signed download failed with ${response.status}`);
+    return new Uint8Array(await response.arrayBuffer());
   }
 
   public verifyCapsule(
