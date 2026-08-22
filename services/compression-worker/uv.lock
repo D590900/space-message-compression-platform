@@ -710,6 +710,7 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "python-magic" },
     { name = "redis" },
+    { name = "requests" },
     { name = "uvicorn" },
     { name = "zstandard" },
 ]
@@ -736,6 +737,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.13,<3" },
     { name = "python-magic", specifier = ">=0.4.27,<1" },
     { name = "redis", specifier = ">=7.3,<8" },
+    { name = "requests", specifier = ">=2.34,<3" },
     { name = "uvicorn", specifier = ">=0.41,<1" },
     { name = "zstandard", specifier = ">=0.25,<1" },
 ]
