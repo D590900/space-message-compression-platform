@@ -71,6 +71,9 @@ jobs:
         with:
           fail-on-severity: moderate
           deny-licenses: GPL-2.0, GPL-3.0, AGPL-1.0, AGPL-3.0
+          # GitHub currently classifies this LGPL-3.0-only wheel as GPL-3.0-or-later.
+          # Keep the exception version-pinned; see docs/security/license-audit.md.
+          allow-dependencies-licenses: pkg:pypi/psycopg-binary@3.3.4
 
   filesystem-scan:
     runs-on: ubuntu-24.04
