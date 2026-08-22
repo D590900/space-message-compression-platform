@@ -4,6 +4,8 @@ import math
 import re
 import subprocess
 import tempfile
+import time
+from dataclasses import replace
 from pathlib import Path
 
 from smcp_worker.adapters.external import (
@@ -314,8 +316,18 @@ def generate_image_candidates(
             continue
         prepared = adapter.preprocess(source, profile)
         for level in levels:
+            encode_started = time.perf_counter_ns()
             candidate = adapter.encode(prepared, EncodeParams(level=level))
-            report = adapter.measure(prepared, adapter.decode(candidate))
+            encode_duration_ms = max(0, (time.perf_counter_ns() - encode_started) // 1_000_000)
+            decode_started = time.perf_counter_ns()
+            decoded = adapter.decode(candidate)
+            decode_duration_ms = max(0, (time.perf_counter_ns() - decode_started) // 1_000_000)
+            candidate = replace(
+                candidate,
+                encode_duration_ms=encode_duration_ms,
+                decode_duration_ms=decode_duration_ms,
+            )
+            report = adapter.measure(prepared, decoded)
             if report.quality_gate_passed:
                 candidates.append((candidate, report))
     return pareto_frontier_per_codec(

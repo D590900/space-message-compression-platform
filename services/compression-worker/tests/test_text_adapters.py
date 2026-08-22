@@ -1,4 +1,5 @@
 import hashlib
+from itertools import count
 
 import pytest
 
@@ -34,7 +35,13 @@ def test_exact_round_trip(
     assert report.original_sha256 == hashlib.sha256(multilingual_source.data).hexdigest()
 
 
-def test_candidate_selection_is_real_and_stable(multilingual_source: SourceObject) -> None:
+def test_candidate_selection_is_real_and_stable(
+    multilingual_source: SourceObject, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = count(start=0, step=2_000_000)
+    monkeypatch.setattr(
+        "smcp_worker.adapters.text.time.perf_counter_ns", lambda: next(clock)
+    )
     candidates = generate_text_candidates(multilingual_source, Profile.ULTRA)
     assert {candidate.codec_id for candidate, _ in candidates} == {
         "text.brotli",
@@ -44,6 +51,8 @@ def test_candidate_selection_is_real_and_stable(multilingual_source: SourceObjec
         candidates, key=lambda item: (len(item[0].payload), item[0].codec_id)
     )
     assert all(report.quality_gate_passed for _, report in candidates)
+    assert all(candidate.encode_duration_ms == 2 for candidate, _ in candidates)
+    assert all(candidate.decode_duration_ms == 2 for candidate, _ in candidates)
 
 
 @pytest.mark.parametrize("data", [b"\xff\xfe", b"valid prefix\x00hidden suffix"])

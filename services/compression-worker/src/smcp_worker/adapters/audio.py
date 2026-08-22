@@ -4,7 +4,9 @@ import io
 import struct
 import subprocess
 import tempfile
+import time
 import wave
+from dataclasses import replace
 from pathlib import Path
 
 from smcp_worker.adapters.external import (
@@ -270,8 +272,18 @@ def generate_audio_candidates(
     prepared = adapter.preprocess(source, profile)
     candidates: list[tuple[EncodedCandidate, QualityReport]] = []
     for bitrate in (12, 20, 32):
+        encode_started = time.perf_counter_ns()
         candidate = adapter.encode(prepared, EncodeParams(level=bitrate))
-        report = adapter.measure(prepared, adapter.decode(candidate))
+        encode_duration_ms = max(0, (time.perf_counter_ns() - encode_started) // 1_000_000)
+        decode_started = time.perf_counter_ns()
+        decoded = adapter.decode(candidate)
+        decode_duration_ms = max(0, (time.perf_counter_ns() - decode_started) // 1_000_000)
+        candidate = replace(
+            candidate,
+            encode_duration_ms=encode_duration_ms,
+            decode_duration_ms=decode_duration_ms,
+        )
+        report = adapter.measure(prepared, decoded)
         if report.quality_gate_passed:
             candidates.append((candidate, report))
     return pareto_frontier_per_codec(
