@@ -86,6 +86,7 @@ describe("capsule planning", () => {
         }),
     );
     const database = {
+      auditApiKeyUsage: () => Promise.resolve(),
       getCapsuleCandidates: () =>
         Promise.resolve([
           {
@@ -173,6 +174,7 @@ describe("capsule planning", () => {
 
   it("returns the persisted Rust build verification attestation", async () => {
     const database = {
+      auditApiKeyUsage: () => Promise.resolve(),
       getCapsule: () =>
         Promise.resolve({
           id: capsuleId,

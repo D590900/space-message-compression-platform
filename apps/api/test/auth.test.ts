@@ -85,15 +85,19 @@ describe("API-key policy", () => {
   });
 
   it("rejects missing scope", async () => {
-    await expect(
-      requireApiKey(
-        new FakeClerk(managedKey({ scopes: ["jobs:read"] })),
-        "Bearer secret-value",
-        "jobs:create",
-      ),
-    ).rejects.toMatchObject({
+    const error = await requireApiKey(
+      new FakeClerk(managedKey({ scopes: ["jobs:read"] })),
+      "Bearer secret-value",
+      "jobs:create",
+    ).catch((caught: unknown) => caught);
+    expect(error).toMatchObject({
       status: 403,
       type: "urn:smcp:problem:insufficient-scope",
+      principal: {
+        tenantSubject: "org_test",
+        keyId: "apikey_test",
+        scopes: ["jobs:read"],
+      },
     });
   });
 
