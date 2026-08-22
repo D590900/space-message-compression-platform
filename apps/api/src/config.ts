@@ -34,6 +34,21 @@ const configSchema = z.object({
     .min(100)
     .max(60_000)
     .default(5_000),
+  WEBHOOK_SECRET_ENCRYPTION_KEY: z.string().refine((value) => {
+    try {
+      return Buffer.from(value, "base64").length === 32;
+    } catch {
+      return false;
+    }
+  }, "must be a Base64-encoded 32-byte key"),
+  WEBHOOK_POLL_MS: z.coerce.number().int().min(100).max(60_000).default(1_000),
+  WEBHOOK_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(8),
+  WEBHOOK_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(100)
+    .max(30_000)
+    .default(10_000),
 });
 
 export type ApiConfig = z.infer<typeof configSchema>;
