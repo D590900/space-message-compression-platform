@@ -56,6 +56,11 @@ const clerk: ClerkGateway = {
   revokeApiKey: () => Promise.resolve(),
 };
 
+const rateLimiter = {
+  consume: () => Promise.resolve(),
+  close: () => Promise.resolve(),
+};
+
 describe("capsule planning", () => {
   const apps: Awaited<ReturnType<typeof buildApp>>["app"][] = [];
   afterEach(async () => {
@@ -122,6 +127,7 @@ describe("capsule planning", () => {
       storage: {} as unknown as ObjectStorage,
       clerk,
       capsulePlanner: planner,
+      rateLimiter,
     });
     apps.push(app);
 
@@ -193,6 +199,7 @@ describe("capsule planning", () => {
       queue: { close: () => Promise.resolve() } as unknown as JobQueue,
       storage: {} as unknown as ObjectStorage,
       clerk,
+      rateLimiter,
     });
     apps.push(app);
 

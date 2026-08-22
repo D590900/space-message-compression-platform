@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 
 import rateLimit from "@fastify/rate-limit";
 import {
@@ -39,6 +39,10 @@ import {
 import { ApiProblem, registerProblemHandler } from "./problem.js";
 import { ApiMetrics, authorizeMetrics } from "./metrics.js";
 import { JobQueue } from "./queue.js";
+import {
+  CostRateLimiter,
+  type CostRateLimiterGateway,
+} from "./rate-limiter.js";
 import { SecretBox } from "./secret-box.js";
 import { ObjectStorage } from "./storage.js";
 import {
@@ -56,6 +60,7 @@ export type AppDependencies = {
   keyRotationScheduler: KeyRotationSchedulerGateway;
   webhookDispatcher: WebhookDispatcherGateway;
   metrics: ApiMetrics;
+  rateLimiter: CostRateLimiterGateway;
 };
 
 function idempotencyKey(request: FastifyRequest): string {
@@ -94,6 +99,13 @@ export async function buildApp(
         config.WEBHOOK_TIMEOUT_MS,
       ),
     metrics: overrides.metrics ?? new ApiMetrics(),
+    rateLimiter:
+      overrides.rateLimiter ??
+      new CostRateLimiter(
+        config.VALKEY_URL,
+        config.TENANT_RATE_COST_PER_MINUTE,
+        config.CREDENTIAL_ROUTE_COST_PER_MINUTE,
+      ),
   };
   dependencies.keyRotationScheduler.start();
   dependencies.webhookDispatcher.start();
@@ -111,8 +123,12 @@ export async function buildApp(
   await app.register(rateLimit, {
     max: 120,
     timeWindow: "1 minute",
-    keyGenerator: (request) =>
-      request.headers.authorization?.slice(-24) ?? request.ip,
+    keyGenerator: (request) => {
+      const credential =
+        request.headers.authorization ?? request.headers.cookie ?? request.ip;
+      const route = request.routeOptions.url ?? request.url.split("?")[0];
+      return `${request.method}:${route}:${createHash("sha256").update(credential).digest("hex")}`;
+    },
   });
 
   const requestStarts = new WeakMap<FastifyRequest, bigint>();
@@ -158,8 +174,9 @@ export async function buildApp(
   });
 
   const apiPrincipal = async (request: FastifyRequest, scope: ApiScope) => {
+    let principal;
     try {
-      return await requireApiKey(
+      principal = await requireApiKey(
         dependencies.clerk,
         request.headers.authorization,
         scope,
@@ -170,6 +187,27 @@ export async function buildApp(
       );
       throw error;
     }
+    await dependencies.rateLimiter.consume(
+      principal.tenantSubject,
+      principal.keyId,
+      request.method,
+      request.routeOptions.url ?? request.url,
+    );
+    return principal;
+  };
+
+  const sessionPrincipal = async (request: FastifyRequest) => {
+    const session = await requireSession(
+      dependencies.clerk,
+      toWebRequest(request, config.API_ORIGIN),
+    );
+    await dependencies.rateLimiter.consume(
+      session.tenantSubject,
+      `session:${session.actorSubject}`,
+      request.method,
+      request.routeOptions.url ?? request.url,
+    );
+    return session;
   };
 
   app.get("/v1/codecs", async (request) => {
@@ -372,10 +410,7 @@ export async function buildApp(
 
   app.post("/v1/projects", async (request, reply) => {
     const requestIdempotencyKey = idempotencyKey(request);
-    const session = await requireSession(
-      dependencies.clerk,
-      toWebRequest(request, config.API_ORIGIN),
-    );
+    const session = await sessionPrincipal(request);
     const input = createProjectSchema.parse(request.body);
     const result = await dependencies.database.createProject(
       session.tenantSubject,
@@ -394,10 +429,7 @@ export async function buildApp(
   });
 
   app.get("/v1/api-keys", async (request) => {
-    const session = await requireSession(
-      dependencies.clerk,
-      toWebRequest(request, config.API_ORIGIN),
-    );
+    const session = await sessionPrincipal(request);
     const page = await dependencies.clerk.listApiKeys(session.tenantSubject);
     return {
       total_count: page.totalCount,
@@ -407,10 +439,7 @@ export async function buildApp(
 
   app.post("/v1/api-keys", async (request, reply) => {
     const requestIdempotencyKey = idempotencyKey(request);
-    const session = await requireSession(
-      dependencies.clerk,
-      toWebRequest(request, config.API_ORIGIN),
-    );
+    const session = await sessionPrincipal(request);
     const input = createApiKeySchema.parse(request.body);
     const secondsUntilExpiration = Math.floor(
       (new Date(input.expires_at).getTime() - Date.now()) / 1000,
@@ -482,10 +511,7 @@ export async function buildApp(
 
   app.post("/v1/api-keys/:id/rotate", async (request, reply) => {
     idempotencyKey(request);
-    const session = await requireSession(
-      dependencies.clerk,
-      toWebRequest(request, config.API_ORIGIN),
-    );
+    const session = await sessionPrincipal(request);
     const { id } = resourceIdParamsSchema.parse(request.params);
     const { overlap_seconds: overlapSeconds } = rotateApiKeySchema.parse(
       request.body ?? {},
@@ -575,10 +601,7 @@ export async function buildApp(
   });
 
   app.delete("/v1/api-keys/:id", async (request, reply) => {
-    const session = await requireSession(
-      dependencies.clerk,
-      toWebRequest(request, config.API_ORIGIN),
-    );
+    const session = await sessionPrincipal(request);
     const { id } = resourceIdParamsSchema.parse(request.params);
     const key = await dependencies.clerk.getApiKey(id);
     if (key.subject !== session.tenantSubject) {
@@ -808,6 +831,7 @@ export async function buildApp(
       dependencies.queue.close(),
       dependencies.keyRotationScheduler.close(),
       dependencies.webhookDispatcher.close(),
+      dependencies.rateLimiter.close(),
     ]);
   });
 
