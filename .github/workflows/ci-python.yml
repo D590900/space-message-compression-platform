@@ -3,7 +3,7 @@ name: Python
 on:
   pull_request:
   push:
-    branches: [main, feat/initial-platform]
+    branches: [main]
 
 permissions:
   contents: read
@@ -35,6 +35,11 @@ jobs:
           version: "0.11.21"
           enable-cache: true
           cache-dependency-glob: ${{ matrix.package }}/uv.lock
+      - name: Install CPU codec tools
+        if: matrix.package == 'services/compression-worker'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ffmpeg libavif-bin libjxl-tools
       - name: Install locked dependencies
         working-directory: ${{ matrix.package }}
         run: uv sync --frozen
