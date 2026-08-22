@@ -4,10 +4,12 @@ import hashlib
 import json
 import logging
 import struct
+import subprocess
 import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import asdict
+from fractions import Fraction
 from pathlib import Path
 from types import ModuleType
 from typing import Any, cast
@@ -321,6 +323,10 @@ class CompressionWorker:
             )
             connection.commit()
 
+            limit_error = self._media_limit_error(input_type, source_bytes)
+            if limit_error is not None:
+                self._terminal_failure(connection, job, limit_error)
+                return
             self._transition(connection, job_id, tenant_subject, "VALIDATING", "PREPROCESSING")
             source = SourceObject(source_bytes, job["declared_mime"], job["object_key"])
             self._transition(connection, job_id, tenant_subject, "PREPROCESSING", "ENCODING")
@@ -996,6 +1002,106 @@ class CompressionWorker:
         if input_type == "TEXT":
             return "text/plain"
         return declared_mime
+
+    def _media_limit_error(self, input_type: str, payload: bytes) -> str | None:
+        if input_type == "TEXT":
+            return None
+        with tempfile.TemporaryDirectory(prefix="smcp-limit-probe-") as directory:
+            path = Path(directory) / "input.bin"
+            path.write_bytes(payload)
+            command = [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0" if input_type in {"IMAGE", "VIDEO"} else "a:0",
+            ]
+            if input_type == "VIDEO":
+                command.append("-count_frames")
+            command.extend(
+                (
+                    "-show_entries",
+                    "format=duration:stream=codec_type,width,height,duration,"
+                    "avg_frame_rate,nb_read_frames",
+                    "-of",
+                    "json",
+                    str(path),
+                )
+            )
+            try:
+                report = json.loads(run(command, timeout=60).stdout)
+            except (
+                json.JSONDecodeError,
+                subprocess.CalledProcessError,
+                subprocess.TimeoutExpired,
+            ):
+                return "MEDIA_PROBE_FAILED"
+        streams = report.get("streams")
+        if not isinstance(streams, list) or not streams or not isinstance(streams[0], dict):
+            return "MEDIA_PROBE_FAILED"
+        stream = streams[0]
+        if input_type in {"IMAGE", "VIDEO"}:
+            try:
+                pixels = int(stream["width"]) * int(stream["height"])
+            except (KeyError, TypeError, ValueError):
+                return "MEDIA_PROBE_FAILED"
+            pixel_limit = (
+                self.settings.max_image_pixels
+                if input_type == "IMAGE"
+                else self.settings.max_video_pixels
+            )
+            if pixels <= 0 or pixels > pixel_limit:
+                return "PIXEL_LIMIT_EXCEEDED"
+        if input_type in {"AUDIO", "VIDEO"}:
+            duration = self._probe_duration(report, stream)
+            if duration is None:
+                return "MEDIA_PROBE_FAILED"
+            duration_limit = (
+                self.settings.max_audio_seconds
+                if input_type == "AUDIO"
+                else self.settings.max_video_seconds
+            )
+            if duration > duration_limit:
+                return "DURATION_LIMIT_EXCEEDED"
+        if input_type == "VIDEO":
+            if duration is None:
+                return "MEDIA_PROBE_FAILED"
+            frames = self._probe_frame_count(stream, duration)
+            if frames is None:
+                return "MEDIA_PROBE_FAILED"
+            if frames > self.settings.max_video_frames:
+                return "FRAME_LIMIT_EXCEEDED"
+        return None
+
+    @staticmethod
+    def _probe_duration(report: dict[str, Any], stream: dict[str, Any]) -> float | None:
+        format_info = report.get("format")
+        format_duration = format_info.get("duration") if isinstance(format_info, dict) else None
+        raw = format_duration or stream.get("duration")
+        if raw is None:
+            return None
+        try:
+            duration = float(raw)
+        except (TypeError, ValueError):
+            return None
+        return duration if duration >= 0 else None
+
+    @staticmethod
+    def _probe_frame_count(stream: dict[str, Any], duration: float) -> int | None:
+        raw_count = stream.get("nb_read_frames")
+        if raw_count is not None and raw_count != "N/A":
+            try:
+                count = int(str(raw_count))
+            except (TypeError, ValueError):
+                return None
+            return count if count >= 0 else None
+        try:
+            rate = Fraction(str(stream["avg_frame_rate"]))
+        except (KeyError, ValueError, ZeroDivisionError):
+            return None
+        if rate <= 0:
+            return None
+        return int(duration * float(rate) + 0.999999)
 
     @staticmethod
     def _candidate_content_type(codec_id: str) -> str:
