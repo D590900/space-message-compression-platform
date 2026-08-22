@@ -47,3 +47,7 @@ jobs:
       - name: Test
         working-directory: ${{ matrix.package }}
         run: uv run pytest -q
+      - name: Validate model provenance catalog
+        if: matrix.package == 'services/compression-worker'
+        working-directory: services/compression-worker
+        run: uv run python -m smcp_worker.model_manifest validate model-manifests/catalog.json

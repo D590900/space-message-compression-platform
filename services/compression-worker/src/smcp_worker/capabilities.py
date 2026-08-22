@@ -1,26 +1,39 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from smcp_worker.adapters.audio import OpusAudioAdapter
 from smcp_worker.adapters.image import AvifImageAdapter, JpegXlImageAdapter
 from smcp_worker.adapters.text import BrotliTextAdapter, ZstandardTextAdapter
 from smcp_worker.adapters.video import Av1VideoAdapter
+from smcp_worker.model_manifest import load_catalog
 from smcp_worker.models import CodecCapabilities, Profile
 
+MODEL_CATALOG = Path(__file__).resolve().parents[2] / "model-manifests" / "catalog.json"
 
-def _model_capability(codec_id: str, content_type: str, model_name: str) -> CodecCapabilities:
-    return CodecCapabilities(
-        codec_id=codec_id,
-        codec_version="unavailable",
-        content_types=(content_type,),
-        profiles=(Profile.ULTRA, Profile.SEMANTIC),
-        enabled=False,
-        deterministic=False,
-        disabled_reason=f"no licensed, checksum-verified {model_name} weights are installed",
-        install_hint=(
-            "Add an immutable manifest under services/compression-worker/model-manifests, "
-            "record code and weights licenses, then explicitly enable the model."
-        ),
-    )
+
+def _model_capabilities() -> tuple[CodecCapabilities, ...]:
+    catalog = load_catalog(MODEL_CATALOG)
+    capabilities: list[CodecCapabilities] = []
+    for model in catalog.models:
+        if model.enabled:
+            raise RuntimeError(
+                f"{model.codec_id} is marked enabled but no neural pipeline is registered"
+            )
+        content_type = model.codec_id.partition(".")[0].upper()
+        capabilities.append(
+            CodecCapabilities(
+                codec_id=model.codec_id,
+                codec_version=model.version,
+                content_types=(content_type,),
+                profiles=(Profile.ULTRA, Profile.SEMANTIC),
+                enabled=False,
+                deterministic=False,
+                disabled_reason=model.disabled_reason,
+                install_hint=model.install_hint,
+            )
+        )
+    return tuple(capabilities)
 
 
 def all_capabilities() -> tuple[CodecCapabilities, ...]:
@@ -32,14 +45,4 @@ def all_capabilities() -> tuple[CodecCapabilities, ...]:
         OpusAudioAdapter().capabilities(),
         Av1VideoAdapter().capabilities(),
     )
-    optional = (
-        _model_capability("image.compressai", "IMAGE", "CompressAI"),
-        _model_capability("image.cod-lite", "IMAGE", "CoD-Lite/GenCodec"),
-        _model_capability("audio.snac", "AUDIO", "SNAC"),
-        _model_capability("audio.mimi", "AUDIO", "Mimi"),
-        _model_capability("audio.encodec", "AUDIO", "EnCodec"),
-        _model_capability("video.mlvc", "VIDEO", "MLVC"),
-        _model_capability("video.dcvc", "VIDEO", "DCVC"),
-        _model_capability("video.liveportrait", "VIDEO", "LivePortrait/GFVC"),
-    )
-    return cpu + optional
+    return cpu + _model_capabilities()

@@ -62,6 +62,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY services/compression-worker/src src
 COPY services/compression-worker/model-manifests model-manifests
 RUN uv sync --frozen --no-dev \
+    && /opt/venv/bin/python -m smcp_worker.model_manifest validate model-manifests/catalog.json \
     && chown -R smcp:smcp /opt/worker /opt/venv
 USER smcp
 ENV PATH=/opt/venv/bin:$PATH

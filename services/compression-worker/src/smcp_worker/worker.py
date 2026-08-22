@@ -125,6 +125,20 @@ class CompressionWorker:
                         ),
                     ),
                 )
+                connection.execute(
+                    """
+                    DELETE FROM codec_registry AS stale
+                    WHERE stale.id = %s
+                      AND stale.version <> %s
+                      AND stale.enabled = false
+                      AND NOT EXISTS (
+                        SELECT 1 FROM encoding_candidates AS candidate
+                        WHERE candidate.codec_id = stale.id
+                          AND candidate.codec_version = stale.version
+                      )
+                    """,
+                    (capability.codec_id, capability.codec_version),
+                )
             connection.commit()
 
     def run_forever(self, on_ready: Callable[[], None] | None = None) -> None:
