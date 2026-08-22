@@ -134,6 +134,10 @@ services:
     read_only: true
     tmpfs: [/tmp]
     security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    pids_limit: 256
+    mem_limit: 1g
+    cpus: 2.0
 
   worker:
     build:
@@ -143,6 +147,9 @@ services:
       <<: *app-environment
       WORKER_CONSUMER_NAME: worker-1
       WORKER_GROUP: compression-workers
+      WORKER_CLAIM_IDLE_MS: ${WORKER_CLAIM_IDLE_MS:-1800000}
+      WORKER_CLAIM_BATCH: ${WORKER_CLAIM_BATCH:-10}
+      WORKER_MAX_ATTEMPTS: ${WORKER_MAX_ATTEMPTS:-3}
       ENVIRONMENT: production
       OTEL_SERVICE_NAME: smcp-compression-worker
     depends_on:
@@ -157,6 +164,9 @@ services:
       - /tmp:size=2g,mode=1777
     security_opt: ["no-new-privileges:true"]
     cap_drop: ["ALL"]
+    pids_limit: 512
+    mem_limit: 4g
+    cpus: 4.0
     stop_grace_period: 30s
     healthcheck:
       test:

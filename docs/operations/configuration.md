@@ -34,9 +34,13 @@ Every project receives hard monthly limits for input bytes, compression jobs and
 
 `GET /v1/projects/{id}/usage` requires `jobs:read` and returns the current UTC calendar-month counters, active job count and configured limits. The initial migration defaults are 10 GiB input, 10,000 compression jobs, 100 concurrent jobs and 1,000 capsules per project per month. Operators should set plan-specific values through controlled database administration until the billing/admin surface is introduced.
 
+## Worker delivery recovery
+
+The worker leaves a failed non-terminal stream delivery pending and reclaims it after `WORKER_CLAIM_IDLE_MS` (30 minutes by default) with `XAUTOCLAIM`. Set that idle threshold above the longest permitted single codec execution in the deployment so a second worker cannot reclaim active work. `WORKER_CLAIM_BATCH` bounds each reclaim pass, and `WORKER_MAX_ATTEMPTS` (default 3) terminalizes a repeatedly crashing or failing job. PostgreSQL is authoritative: completed deliveries are acknowledged without rerunning side effects, and stale compression attempts remove tracked partial artifacts before restarting.
+
 ## Capsule runtime
 
-Both API and worker production images contain the same release-built `smcp-capsule` binary. The API invokes its planner with argv-only process execution; the worker constructs binary sections in a private temporary directory, builds atomically, invokes the Rust verifier, and uploads only verified output. Capsule failures are terminal and do not stop the worker from consuming unrelated jobs.
+Both API and worker production images contain the same release-built `smcp-capsule` binary. The API invokes its planner with argv-only process execution; the worker constructs binary sections in a private temporary directory, builds atomically, invokes the Rust verifier, and uploads only verified output. Capsule failures use the same bounded retry policy as compression and do not stop the worker from consuming unrelated jobs.
 
 The default capsule budget is 2,000,000 bytes. `pad_to_budget` is opt-in. The database remains authoritative for plan selection, build state, entry ordinals, digests and the reconstruction report; Valkey only transports the capsule identifier and tenant subject.
 
@@ -46,7 +50,7 @@ Optional neural adapters are disabled until an operator installs pinned dependen
 
 ## CPU codec runtime
 
-The production worker contains Brotli, Zstandard, libavif, JPEG XL, Opus and SVT-AV1/dav1d. FFmpeg 9.0.1 is built from the release tarball only after its signature and signing-key fingerprint are verified. The build uses `--disable-gpl`; do not replace it with a distribution FFmpeg package without reviewing `ffmpeg -buildconf` and the resulting image license obligations.
+The production worker contains Brotli, Zstandard, libavif, JPEG XL, Opus and SVT-AV1/dav1d. FFmpeg 9.0.1 is built from the release tarball only after its signature and signing-key fingerprint are verified. The build uses `--disable-gpl --disable-network`; do not replace it with a distribution FFmpeg package without reviewing `ffmpeg -buildconf`, network protocol support and the resulting image license obligations.
 
 `GET /v1/codecs` requires `codecs:read` and returns both enabled baselines and disabled optional model families. Disabled entries include a reason and installation/manifest guidance. `GET /v1/models` returns only immutable manifests actually registered in PostgreSQL.
 
