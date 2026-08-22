@@ -30,6 +30,10 @@ import {
 } from "./capsule-planner.js";
 import { Database } from "./database.js";
 import { toWebRequest } from "./http-request.js";
+import {
+  KeyRotationScheduler,
+  type KeyRotationSchedulerGateway,
+} from "./key-rotation-scheduler.js";
 import { ApiProblem, registerProblemHandler } from "./problem.js";
 import { JobQueue } from "./queue.js";
 import { ObjectStorage } from "./storage.js";
@@ -40,6 +44,7 @@ export type AppDependencies = {
   storage: ObjectStorage;
   clerk: ClerkGateway;
   capsulePlanner: CapsulePlannerGateway;
+  keyRotationScheduler: KeyRotationSchedulerGateway;
 };
 
 function idempotencyKey(request: FastifyRequest): string {
@@ -54,15 +59,21 @@ export async function buildApp(
   config: ApiConfig,
   overrides: Partial<AppDependencies> = {},
 ): Promise<{ app: FastifyInstance; dependencies: AppDependencies }> {
+  const database = overrides.database ?? new Database(config.DATABASE_URL);
+  const clerk = overrides.clerk ?? new ProductionClerkGateway(config);
   const dependencies: AppDependencies = {
-    database: overrides.database ?? new Database(config.DATABASE_URL),
+    database,
     queue: overrides.queue ?? new JobQueue(config.VALKEY_URL),
     storage: overrides.storage ?? new ObjectStorage(config),
-    clerk: overrides.clerk ?? new ProductionClerkGateway(config),
+    clerk,
     capsulePlanner:
       overrides.capsulePlanner ??
       new RustCapsulePlanner(config.CAPSULE_CLI_PATH),
+    keyRotationScheduler:
+      overrides.keyRotationScheduler ??
+      new KeyRotationScheduler(database, clerk, config.KEY_ROTATION_POLL_MS),
   };
+  dependencies.keyRotationScheduler.start();
 
   const app = Fastify({
     logger: {
@@ -297,19 +308,20 @@ export async function buildApp(
   });
 
   app.post("/v1/projects", async (request, reply) => {
-    idempotencyKey(request);
+    const requestIdempotencyKey = idempotencyKey(request);
     const session = await requireSession(
       dependencies.clerk,
       toWebRequest(request, config.API_ORIGIN),
     );
     const input = createProjectSchema.parse(request.body);
-    const project = await dependencies.database.createProject(
+    const result = await dependencies.database.createProject(
       session.tenantSubject,
       session.actorSubject,
       request.id,
+      requestIdempotencyKey,
       input,
     );
-    return reply.status(201).send(project);
+    return reply.status(result.created ? 201 : 200).send(result.project);
   });
 
   app.get("/v1/api-keys", async (request) => {
@@ -363,19 +375,24 @@ export async function buildApp(
     const { overlap_seconds: overlapSeconds } = rotateApiKeySchema.parse(
       request.body ?? {},
     );
-    if (overlapSeconds !== 0) {
-      throw new ApiProblem(
-        422,
-        "Delayed revocation requires the rotation scheduler",
-        "urn:smcp:problem:capability-disabled",
-      );
-    }
     const oldKey = await dependencies.clerk.getApiKey(id);
     if (oldKey.subject !== session.tenantSubject || oldKey.revoked) {
       throw new ApiProblem(
         404,
         "API key not found",
         "urn:smcp:problem:not-found",
+      );
+    }
+    if (
+      await dependencies.database.apiKeyRotationExists(
+        session.tenantSubject,
+        oldKey.id,
+      )
+    ) {
+      throw new ApiProblem(
+        409,
+        "This key has already been rotated; one-time replacement secrets cannot be replayed",
+        "urn:smcp:problem:rotation-already-created",
       );
     }
     const remainingSeconds = oldKey.expiration
@@ -389,11 +406,57 @@ export async function buildApp(
       claims: { smcp_issued: true, rotated_from: oldKey.id },
       secondsUntilExpiration: remainingSeconds,
     });
-    await dependencies.clerk.revokeApiKey(
-      oldKey.id,
-      `Rotated to ${replacement.id}`,
-    );
-    return reply.status(201).send(replacement);
+    let rotation;
+    try {
+      rotation = await dependencies.database.scheduleApiKeyRotation(
+        session.tenantSubject,
+        session.actorSubject,
+        request.id,
+        oldKey.id,
+        replacement.id,
+        new Date(Date.now() + overlapSeconds * 1_000),
+      );
+    } catch (error) {
+      await dependencies.clerk.revokeApiKey(
+        replacement.id,
+        "Rotation setup failed",
+      );
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "23505"
+      ) {
+        throw new ApiProblem(
+          409,
+          "This key has already been rotated; one-time replacement secrets cannot be replayed",
+          "urn:smcp:problem:rotation-already-created",
+        );
+      }
+      throw error;
+    }
+    let revocationPending = overlapSeconds > 0;
+    if (overlapSeconds === 0) {
+      try {
+        await dependencies.clerk.revokeApiKey(
+          oldKey.id,
+          `Rotated to ${replacement.id}`,
+        );
+        await dependencies.database.markApiKeyRotationRevoked(rotation.id);
+        revocationPending = false;
+      } catch {
+        // The durable due row remains claimable by the scheduler.
+        revocationPending = true;
+      }
+    }
+    return reply.status(201).send({
+      ...replacement,
+      rotation: {
+        old_key_id: oldKey.id,
+        revoke_at: rotation.revoke_at,
+        revocation_pending: revocationPending,
+      },
+    });
   });
 
   app.delete("/v1/api-keys/:id", async (request, reply) => {
@@ -418,7 +481,7 @@ export async function buildApp(
   });
 
   app.post("/v1/uploads/presign", async (request, reply) => {
-    idempotencyKey(request);
+    const requestIdempotencyKey = idempotencyKey(request);
     const principal = await apiPrincipal(request, "jobs:create");
     const input = presignUploadSchema.parse(request.body);
     if (input.bytes > config.MAX_UPLOAD_BYTES) {
@@ -433,22 +496,23 @@ export async function buildApp(
     const expiresAt = new Date(
       Date.now() + config.SIGNED_URL_TTL_SECONDS * 1000,
     );
-    const source = await dependencies.database.createSourceObject(
+    const result = await dependencies.database.createSourceObject(
       principal.tenantSubject,
       principal.actorSubject,
       principal.keyId,
       request.id,
+      requestIdempotencyKey,
       input,
       objectKey,
       expiresAt,
     );
     const uploadUrl = await dependencies.storage.presignUpload(
-      objectKey,
+      result.source.object_key,
       input.content_type,
       input.bytes,
     );
-    return reply.status(201).send({
-      source_object_id: source.id,
+    return reply.status(result.created ? 201 : 200).send({
+      source_object_id: result.source.id,
       upload_url: uploadUrl,
       method: "PUT",
       required_headers: {
@@ -456,7 +520,7 @@ export async function buildApp(
         "content-length": String(input.bytes),
         "x-amz-server-side-encryption": "AES256",
       },
-      expires_at: expiresAt.toISOString(),
+      expires_at: result.source.upload_expires_at.toISOString(),
     });
   });
 
@@ -573,6 +637,7 @@ export async function buildApp(
     await Promise.all([
       dependencies.database.close(),
       dependencies.queue.close(),
+      dependencies.keyRotationScheduler.close(),
     ]);
   });
 

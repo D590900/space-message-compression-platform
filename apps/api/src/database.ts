@@ -152,6 +152,15 @@ export type CapsuleRecord = {
   completed_at: Date | null;
 };
 
+export type ApiKeyRotationRecord = {
+  id: string;
+  tenant_subject: string;
+  old_key_id: string;
+  new_key_id: string;
+  revoke_at: Date;
+  attempt: number;
+};
+
 export class Database {
   private readonly sql;
 
@@ -442,26 +451,50 @@ export class Database {
     tenantSubject: string,
     actorSubject: string,
     requestId: string,
+    idempotencyKey: string,
     input: CreateProjectInput,
-  ): Promise<ProjectRecord> {
-    const id = randomUUID();
-    const rows = await this.sql<ProjectRecord[]>`
-      INSERT INTO projects (id, tenant_subject, name)
-      VALUES (${id}, ${tenantSubject}, ${input.name})
-      RETURNING id, tenant_subject, name, created_at
-    `;
-    await this.audit(
-      tenantSubject,
-      id,
-      actorSubject,
-      null,
-      "project.created",
-      "project",
-      id,
-      requestId,
-      "success",
-    );
-    return rows[0]!;
+  ): Promise<{ project: ProjectRecord; created: boolean }> {
+    const fingerprint = createHash("sha256")
+      .update(JSON.stringify(input))
+      .digest();
+    return this.sql.begin(async (transaction) => {
+      const previous = await transaction<ProjectRecord[]>`
+        SELECT id, tenant_subject, name, created_at
+        FROM projects
+        WHERE tenant_subject = ${tenantSubject} AND idempotency_key = ${idempotencyKey}
+        FOR UPDATE
+      `;
+      if (previous[0]) {
+        const matches = await transaction<{ matches: boolean }[]>`
+          SELECT request_fingerprint = ${fingerprint} AS matches
+          FROM projects WHERE id = ${previous[0].id}
+        `;
+        if (!matches[0]?.matches)
+          throw new ApiProblem(
+            409,
+            "Idempotency key reused with different input",
+            "urn:smcp:problem:idempotency-conflict",
+          );
+        return { project: previous[0], created: false };
+      }
+      const id = randomUUID();
+      const rows = await transaction<ProjectRecord[]>`
+        INSERT INTO projects (
+          id, tenant_subject, name, idempotency_key, request_fingerprint
+        ) VALUES (${id}, ${tenantSubject}, ${input.name}, ${idempotencyKey}, ${fingerprint})
+        RETURNING id, tenant_subject, name, created_at
+      `;
+      await transaction`
+        INSERT INTO audit_events (
+          tenant_subject, project_id, actor_subject, action, resource_type,
+          resource_id, request_id, outcome
+        ) VALUES (
+          ${tenantSubject}, ${id}, ${actorSubject}, 'project.created', 'project',
+          ${id}, ${requestId}, 'success'
+        )
+      `;
+      return { project: rows[0]!, created: true };
+    });
   }
 
   public async createSourceObject(
@@ -469,35 +502,159 @@ export class Database {
     actorSubject: string,
     apiKeyId: string,
     requestId: string,
+    idempotencyKey: string,
     input: PresignUploadInput,
     objectKey: string,
     expiresAt: Date,
-  ): Promise<SourceObjectRecord> {
+  ): Promise<{ source: SourceObjectRecord; created: boolean }> {
     await this.assertProject(tenantSubject, input.project_id);
-    const id = randomUUID();
-    const rows = await this.sql<SourceObjectRecord[]>`
-      INSERT INTO source_objects (
-        id, tenant_subject, project_id, object_key, declared_mime,
-        expected_bytes, upload_expires_at, sha256
-      ) VALUES (
-        ${id}, ${tenantSubject}, ${input.project_id}, ${objectKey}, ${input.content_type},
-        ${input.bytes}, ${expiresAt}, ${input.sha256 ? Buffer.from(input.sha256, "hex") : null}
-      )
-      RETURNING id, tenant_subject, project_id, object_key, declared_mime,
-                expected_bytes, upload_expires_at
+    const fingerprint = createHash("sha256")
+      .update(JSON.stringify(input))
+      .digest();
+    return this.sql.begin(async (transaction) => {
+      const previous = await transaction<SourceObjectRecord[]>`
+        SELECT id, tenant_subject, project_id, object_key, declared_mime,
+               expected_bytes, upload_expires_at
+        FROM source_objects
+        WHERE tenant_subject = ${tenantSubject}
+          AND project_id = ${input.project_id}
+          AND idempotency_key = ${idempotencyKey}
+        FOR UPDATE
+      `;
+      if (previous[0]) {
+        const matches = await transaction<{ matches: boolean }[]>`
+          SELECT request_fingerprint = ${fingerprint} AS matches
+          FROM source_objects WHERE id = ${previous[0].id}
+        `;
+        if (!matches[0]?.matches)
+          throw new ApiProblem(
+            409,
+            "Idempotency key reused with different input",
+            "urn:smcp:problem:idempotency-conflict",
+          );
+        return { source: previous[0], created: false };
+      }
+      const id = randomUUID();
+      const rows = await transaction<SourceObjectRecord[]>`
+        INSERT INTO source_objects (
+          id, tenant_subject, project_id, object_key, declared_mime,
+          expected_bytes, upload_expires_at, sha256,
+          idempotency_key, request_fingerprint
+        ) VALUES (
+          ${id}, ${tenantSubject}, ${input.project_id}, ${objectKey}, ${input.content_type},
+          ${input.bytes}, ${expiresAt},
+          ${input.sha256 ? Buffer.from(input.sha256, "hex") : null},
+          ${idempotencyKey}, ${fingerprint}
+        )
+        RETURNING id, tenant_subject, project_id, object_key, declared_mime,
+                  expected_bytes, upload_expires_at
+      `;
+      await transaction`
+        INSERT INTO audit_events (
+          tenant_subject, project_id, actor_subject, api_key_id, action,
+          resource_type, resource_id, request_id, outcome
+        ) VALUES (
+          ${tenantSubject}, ${input.project_id}, ${actorSubject}, ${apiKeyId},
+          'upload.presigned', 'source_object', ${id}, ${requestId}, 'success'
+        )
+      `;
+      return { source: rows[0]!, created: true };
+    });
+  }
+
+  public async scheduleApiKeyRotation(
+    tenantSubject: string,
+    actorSubject: string,
+    requestId: string,
+    oldKeyId: string,
+    newKeyId: string,
+    revokeAt: Date,
+  ): Promise<ApiKeyRotationRecord> {
+    return this.sql.begin(async (transaction) => {
+      const id = randomUUID();
+      const rows = await transaction<ApiKeyRotationRecord[]>`
+        INSERT INTO api_key_rotations (
+          id, tenant_subject, old_key_id, new_key_id, revoke_at, created_by
+        ) VALUES (
+          ${id}, ${tenantSubject}, ${oldKeyId}, ${newKeyId}, ${revokeAt}, ${actorSubject}
+        )
+        RETURNING id, tenant_subject, old_key_id, new_key_id, revoke_at, attempt
+      `;
+      await transaction`
+        INSERT INTO audit_events (
+          tenant_subject, actor_subject, api_key_id, action, resource_type,
+          resource_id, request_id, outcome, metadata
+        ) VALUES (
+          ${tenantSubject}, ${actorSubject}, ${oldKeyId}, 'api_key.rotation_scheduled',
+          'api_key', ${oldKeyId}, ${requestId}, 'success',
+          ${transaction.json({ new_key_id: newKeyId, revoke_at: revokeAt.toISOString() })}
+        )
+      `;
+      return rows[0]!;
+    });
+  }
+
+  public async apiKeyRotationExists(
+    tenantSubject: string,
+    oldKeyId: string,
+  ): Promise<boolean> {
+    const rows = await this.sql<{ exists: boolean }[]>`
+      SELECT EXISTS(
+        SELECT 1 FROM api_key_rotations
+        WHERE tenant_subject = ${tenantSubject} AND old_key_id = ${oldKeyId}
+      ) AS exists
     `;
-    await this.audit(
-      tenantSubject,
-      input.project_id,
-      actorSubject,
-      apiKeyId,
-      "upload.presigned",
-      "source_object",
-      id,
-      requestId,
-      "success",
-    );
-    return rows[0]!;
+    return rows[0]?.exists ?? false;
+  }
+
+  public async markApiKeyRotationRevoked(id: string): Promise<void> {
+    await this.sql`
+      UPDATE api_key_rotations SET revoked_at = now(), claim_token = NULL, claimed_at = NULL
+      WHERE id = ${id} AND revoked_at IS NULL
+    `;
+  }
+
+  public async claimDueApiKeyRotations(
+    claimToken: string,
+    limit: number,
+  ): Promise<ApiKeyRotationRecord[]> {
+    return this.sql<ApiKeyRotationRecord[]>`
+      UPDATE api_key_rotations
+      SET claim_token = ${claimToken}, claimed_at = now(), attempt = attempt + 1
+      WHERE id IN (
+        SELECT id FROM api_key_rotations
+        WHERE revoked_at IS NULL AND revoke_at <= now()
+          AND (claimed_at IS NULL OR claimed_at < now() - interval '5 minutes')
+        ORDER BY revoke_at, id
+        FOR UPDATE SKIP LOCKED
+        LIMIT ${limit}
+      )
+      RETURNING id, tenant_subject, old_key_id, new_key_id, revoke_at, attempt
+    `;
+  }
+
+  public async completeApiKeyRotation(
+    id: string,
+    claimToken: string,
+  ): Promise<void> {
+    await this.sql`
+      UPDATE api_key_rotations
+      SET revoked_at = now(), claim_token = NULL, claimed_at = NULL, last_error = NULL
+      WHERE id = ${id} AND claim_token = ${claimToken} AND revoked_at IS NULL
+    `;
+  }
+
+  public async retryApiKeyRotation(
+    id: string,
+    claimToken: string,
+    errorCode: string,
+  ): Promise<void> {
+    await this.sql`
+      UPDATE api_key_rotations
+      SET claim_token = NULL, claimed_at = NULL, last_error = ${errorCode},
+          revoke_at = now() + power(2, LEAST(attempt, 10)) * interval '1 second'
+      WHERE id = ${id} AND claim_token = ${claimToken} AND revoked_at IS NULL
+    `;
   }
 
   public async createCompressionJob(

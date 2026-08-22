@@ -90,8 +90,17 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ResourceId"
         - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ApiKeyRotate" }
       responses:
-        "201": { description: Replacement secret returned exactly once }
+        "201":
+          {
+            description: Replacement secret and durable old-key revocation schedule,
+          }
+        "409": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
   /v1/api-keys/{id}:
     delete:
@@ -360,6 +369,15 @@ components:
           uniqueItems: true
           items: { $ref: "#/components/schemas/Scope" }
         expires_at: { type: string, format: date-time }
+    ApiKeyRotate:
+      type: object
+      additionalProperties: false
+      properties:
+        overlap_seconds:
+          type: integer
+          minimum: 0
+          maximum: 86400
+          default: 0
     Scope:
       type: string
       enum:
