@@ -1,0 +1,28 @@
+name: Bug report
+description: Report a reproducible platform defect without including private content or secrets.
+title: "[bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Never attach API keys, signed URLs, user payloads, model weights or production logs containing identifiers.
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Observed behavior
+      description: Include sanitized errors and request IDs where available.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Provide the smallest synthetic reproduction and environment versions.
+    validations:
+      required: true

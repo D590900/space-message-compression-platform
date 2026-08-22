@@ -1,0 +1,49 @@
+name: Python
+
+on:
+  pull_request:
+  push:
+    branches: [main, feat/initial-platform]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: python-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - services/compression-worker
+          - packages/sdk-python
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Configure Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12.13"
+      - name: Configure uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: "0.8.14"
+          enable-cache: true
+          cache-dependency-glob: ${{ matrix.package }}/uv.lock
+      - name: Install locked dependencies
+        working-directory: ${{ matrix.package }}
+        run: uv sync --frozen
+      - name: Lint
+        working-directory: ${{ matrix.package }}
+        run: uv run ruff check src tests
+      - name: Type check
+        working-directory: ${{ matrix.package }}
+        run: uv run mypy src
+      - name: Test
+        working-directory: ${{ matrix.package }}
+        run: uv run pytest -q

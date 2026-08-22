@@ -1,0 +1,33 @@
+name: TypeScript
+
+on:
+  pull_request:
+  push:
+    branches: [main, feat/initial-platform]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: typescript-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Configure Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24.10.0
+      - name: Enable pnpm
+        run: corepack enable
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Run package quality gates
+        run: pnpm check
+      - name: Validate OpenAPI
+        run: pnpm openapi:lint

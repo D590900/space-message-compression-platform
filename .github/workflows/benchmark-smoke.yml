@@ -1,0 +1,27 @@
+name: Benchmark smoke
+
+on:
+  pull_request:
+    paths:
+      - "benchmarks/**"
+      - "crates/**"
+      - "services/compression-worker/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.98.0 --profile minimal
+      - name: Run capsule benchmark smoke
+        run: >-
+          cargo run --locked --release -p smcp-capsule-cli --
+          benchmark packages/test-vectors/capsules/v1-golden.capsule
+          --iterations 5

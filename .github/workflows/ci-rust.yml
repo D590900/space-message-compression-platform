@@ -1,0 +1,41 @@
+name: Rust
+
+on:
+  pull_request:
+  push:
+    branches: [main, feat/initial-platform]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Install pinned toolchain
+        run: rustup toolchain install 1.98.0 --profile minimal --component clippy,rustfmt
+      - name: Cache Cargo artifacts
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - name: Check formatting
+        run: cargo fmt --all --check
+      - name: Lint
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Test
+        run: cargo test --workspace --all-features --locked
+      - name: Verify committed golden vector
+        run: |
+          sha256sum --check packages/test-vectors/capsules/v1-golden.capsule.sha256
+          cargo run --quiet --locked -p smcp-capsule-cli -- verify packages/test-vectors/capsules/v1-golden.capsule
