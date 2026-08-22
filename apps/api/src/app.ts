@@ -715,6 +715,13 @@ export async function buildApp(
   app.post("/v1/compressions", async (request, reply) => {
     const principal = await apiPrincipal(request, "jobs:create");
     const input = createCompressionSchema.parse(request.body);
+    if (input.profile === "semantic") {
+      throw new ApiProblem(
+        422,
+        "Semantic profile is unavailable until a verified decoder and immutable weights are enabled",
+        "urn:smcp:problem:semantic-profile-unavailable",
+      );
+    }
     const result = await dependencies.database.createCompressionJob(
       principal.tenantSubject,
       principal.actorSubject,

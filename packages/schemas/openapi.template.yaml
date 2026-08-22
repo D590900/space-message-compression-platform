@@ -189,6 +189,7 @@ paths:
       responses:
         "202": { description: Job accepted }
         "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
   /v1/compressions/{id}:
     get:
       summary: Get a compression job

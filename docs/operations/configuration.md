@@ -54,6 +54,8 @@ The default capsule budget is 2,000,000 bytes. `pad_to_budget` is opt-in. The da
 
 Optional neural adapters are disabled until an operator installs pinned dependencies, places externally obtained weights in the immutable model cache and validates their manifests. No application path downloads weights.
 
+The `semantic` profile remains part of the versioned API vocabulary, but job creation returns `422 semantic-profile-unavailable` until an enabled implementation includes its verified decoder and immutable weights in the reproducibility chain. The worker also terminalizes legacy queued semantic jobs with `SEMANTIC_PROFILE_UNAVAILABLE`; it never substitutes a baseline codec while claiming semantic reconstruction.
+
 ## CPU codec runtime
 
 The production worker contains Brotli, Zstandard, libavif, JPEG XL, Opus and SVT-AV1/dav1d. FFmpeg 9.0.1 is built from the release tarball only after its signature and signing-key fingerprint are verified. The build uses `--disable-gpl --disable-network`; do not replace it with a distribution FFmpeg package without reviewing `ffmpeg -buildconf`, network protocol support and the resulting image license obligations.
