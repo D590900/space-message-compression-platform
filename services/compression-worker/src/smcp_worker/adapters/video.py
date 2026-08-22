@@ -175,6 +175,7 @@ class Av1VideoAdapter:
                 "libopus",
                 "-b:a",
                 "48k",
+                "-bitexact",
                 "-y",
                 "{output}",
             ),

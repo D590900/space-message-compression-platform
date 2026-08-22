@@ -40,10 +40,12 @@ def test_opus_decode_and_quality_gate(test_audio: SourceObject) -> None:
         pytest.skip(capability.disabled_reason or "codec is disabled")
     prepared = adapter.preprocess(test_audio, Profile.FAITHFUL)
     candidate = adapter.encode(prepared, EncodeParams(level=20))
+    candidate_again = adapter.encode(prepared, EncodeParams(level=20))
     decoded = adapter.decode(candidate)
     report = adapter.measure(prepared, decoded)
 
     assert candidate.payload.startswith(b"OggS")
+    assert candidate_again.payload == candidate.payload
     assert report.quality_gate_passed
     duration_delta = report.metrics["duration_delta_seconds"]
     assert isinstance(duration_delta, float)

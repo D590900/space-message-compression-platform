@@ -172,6 +172,7 @@ class OpusAudioAdapter:
                 "audio",
                 "-frame_duration",
                 "60",
+                "-bitexact",
                 "-y",
                 "{output}",
             ),
