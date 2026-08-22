@@ -1,0 +1,21 @@
+{
+  "budget_bytes": 1000,
+  "fixed_overhead_bytes": 100,
+  "items": [
+    {
+      "id": "message-a",
+      "required": true,
+      "candidates": [
+        { "id": "candidate-a-small", "bytes": 250, "utility": 5 },
+        { "id": "candidate-a-large", "bytes": 500, "utility": 10 }
+      ]
+    },
+    {
+      "id": "message-b",
+      "required": false,
+      "candidates": [
+        { "id": "candidate-b", "bytes": 450, "utility": 8 }
+      ]
+    }
+  ]
+}

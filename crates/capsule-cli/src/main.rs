@@ -7,11 +7,12 @@ use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use smcp_capsule_format::{
     BuildOptions, ParsedSection, Section, SectionKind, build, parse, verify,
 };
+use smcp_capsule_planner::{Candidate, Item, PlanRequest, Solver, plan};
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 
@@ -24,6 +25,12 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Select quality-gated candidates under a strict total budget.
+    Plan {
+        /// JSON planner request. Candidate byte counts must be actual serialized sizes.
+        #[arg(long)]
+        input: PathBuf,
+    },
     /// Build a canonical capsule atomically.
     Build {
         /// Output file.
@@ -81,8 +88,30 @@ struct InspectView {
     sections: Vec<SectionView>,
 }
 
+#[derive(Deserialize)]
+struct PlanInput {
+    budget_bytes: u64,
+    fixed_overhead_bytes: u64,
+    items: Vec<PlanItemInput>,
+}
+
+#[derive(Deserialize)]
+struct PlanItemInput {
+    id: String,
+    required: bool,
+    candidates: Vec<PlanCandidateInput>,
+}
+
+#[derive(Deserialize)]
+struct PlanCandidateInput {
+    id: String,
+    bytes: u64,
+    utility: i64,
+}
+
 fn main() -> Result<()> {
     match Cli::parse().command {
+        Command::Plan { input } => command_plan(&input),
         Command::Build {
             output,
             budget,
@@ -100,6 +129,53 @@ fn main() -> Result<()> {
         } => command_extract(&input, &kind, &output),
         Command::Benchmark { input, iterations } => command_benchmark(&input, iterations),
     }
+}
+
+fn command_plan(input: &Path) -> Result<()> {
+    let request: PlanInput = serde_json::from_slice(
+        &fs::read(input).with_context(|| format!("read {}", input.display()))?,
+    )?;
+    let result = plan(&PlanRequest {
+        budget_bytes: request.budget_bytes,
+        fixed_overhead_bytes: request.fixed_overhead_bytes,
+        items: request
+            .items
+            .into_iter()
+            .map(|item| Item {
+                id: item.id,
+                required: item.required,
+                candidates: item
+                    .candidates
+                    .into_iter()
+                    .map(|candidate| Candidate {
+                        id: candidate.id,
+                        bytes: candidate.bytes,
+                        utility: candidate.utility,
+                    })
+                    .collect(),
+            })
+            .collect(),
+    })?;
+    println!(
+        "{}",
+        serde_json::json!({
+            "solver": match result.solver {
+                Solver::Exact => "exact",
+                Solver::Greedy => "greedy",
+            },
+            "actual_bytes": result.actual_bytes,
+            "total_utility": result.total_utility,
+            "included_items": result.included_items,
+            "selections": result.selections.iter().map(|selection| serde_json::json!({
+                "item_id": selection.item_id,
+                "candidate_id": selection.candidate_id,
+                "bytes": selection.bytes,
+                "utility": selection.utility,
+                "reason": selection.reason,
+            })).collect::<Vec<_>>(),
+        })
+    );
+    Ok(())
 }
 
 fn command_build(
