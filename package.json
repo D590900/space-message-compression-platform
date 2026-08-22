@@ -15,7 +15,8 @@
     "lint": "turbo run lint",
     "test": "turbo run test",
     "typecheck": "turbo run typecheck",
-    "openapi:lint": "redocly lint docs/api/openapi.yaml"
+    "openapi:generate": "pnpm --filter @smcp/schemas openapi:generate",
+    "openapi:lint": "pnpm --filter @smcp/schemas openapi:check && redocly lint docs/api/openapi.yaml"
   },
   "devDependencies": {
     "@redocly/cli": "2.47.0",
