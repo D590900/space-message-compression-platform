@@ -1,0 +1,18 @@
+[package]
+name = "smcp-capsule-planner"
+description = "Deterministic multiple-choice knapsack planner for strict capsule budgets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+thiserror = "2.0.18"
+
+[dev-dependencies]
+proptest = "1.8.0"
+
+[lints]
+workspace = true
+

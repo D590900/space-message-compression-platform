@@ -1,0 +1,27 @@
+[package]
+name = "smcp-capsule-cli"
+description = "Build, inspect, verify, extract and benchmark SMCP capsules"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "smcp-capsule"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.100"
+clap = { version = "4.5.48", features = ["derive"] }
+hex = "0.4.3"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+sha2 = "0.10.9"
+smcp-capsule-format = { path = "../capsule-format" }
+tempfile = "3.23.0"
+uuid = { version = "1.18.1", features = ["std"] }
+
+[lints]
+workspace = true
+
