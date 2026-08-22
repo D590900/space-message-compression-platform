@@ -56,9 +56,7 @@ def test_claims_stale_pending_messages_from_every_stream() -> None:
         DECOMPRESSION_STREAM,
         CAPSULE_STREAM,
     ]
-    assert all(
-        call.kwargs == {"count": 7} for call in worker.redis.xautoclaim.call_args_list
-    )
+    assert all(call.kwargs == {"count": 7} for call in worker.redis.xautoclaim.call_args_list)
 
 
 @pytest.mark.parametrize("terminal,expected_ack_count", [(False, 0), (True, 1)])
@@ -77,9 +75,7 @@ def test_retryable_message_stays_pending_until_attempts_are_exhausted(
     )
 
     assert worker.redis.xack.call_count == expected_ack_count
-    worker._fail_job.assert_called_once_with(
-        COMPRESSION_STREAM, job_id, "tenant", "WORKER_FAILURE"
-    )
+    worker._fail_job.assert_called_once_with(COMPRESSION_STREAM, job_id, "tenant", "WORKER_FAILURE")
 
 
 def test_candidate_cleanup_uses_bounded_s3_batches() -> None:
@@ -106,3 +102,31 @@ def test_invalid_internal_job_id_is_acknowledged_without_database_work() -> None
 
     worker.process_job.assert_not_called()
     worker.redis.xack.assert_called_once_with(COMPRESSION_STREAM, "workers", "1-0")
+
+
+def test_worker_failure_audit_contains_only_content_free_state() -> None:
+    connection = MagicMock()
+
+    CompressionWorker._audit_worker_failure(
+        connection,
+        "org_test",
+        "00000000-0000-0000-0000-000000000001",
+        "compression",
+        "00000000-0000-0000-0000-000000000002",
+        "MEDIA_PROBE_FAILED",
+        "FAILED_TERMINAL",
+        2,
+    )
+
+    parameters = connection.execute.call_args.args[1]
+    assert parameters[:6] == (
+        "org_test",
+        "00000000-0000-0000-0000-000000000001",
+        "compression.failed",
+        "compression_job",
+        "00000000-0000-0000-0000-000000000002",
+        "worker:00000000-0000-0000-0000-000000000002",
+    )
+    assert parameters[6] == (
+        '{"attempt": 2, "error_code": "MEDIA_PROBE_FAILED", "status": "FAILED_TERMINAL"}'
+    )
