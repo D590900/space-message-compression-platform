@@ -81,6 +81,17 @@ paths:
           description: Secret returned exactly once
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
+  /v1/projects/{id}/usage:
+    get:
+      summary: Get current project usage and hard quotas
+      tags: [Projects]
+      operationId: getProjectUsage
+      x-required-scope: jobs:read
+      parameters: [{ $ref: "#/components/parameters/ResourceId" }]
+      responses:
+        "200":
+          { description: "Monthly counters, active jobs and configured limits" }
+        "404": { $ref: "#/components/responses/Problem" }
   /v1/api-keys/{id}/rotate:
     post:
       summary: Rotate an API key
