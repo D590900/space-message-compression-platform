@@ -285,9 +285,7 @@ class CompressionWorker:
                 raise ValueError("job does not exist for tenant")
             if job["status"] in {"COMPLETED", "FAILED_TERMINAL", "CANCELLED"}:
                 return
-            if job["status"] != "PENDING" and not self._recover_compression_job(
-                connection, job
-            ):
+            if job["status"] != "PENDING" and not self._recover_compression_job(connection, job):
                 return
             if Profile(job["profile"]) == Profile.SEMANTIC:
                 self._terminal_failure(connection, job, "SEMANTIC_PROFILE_UNAVAILABLE")
@@ -1162,6 +1160,16 @@ class CompressionWorker:
             """,
             (code, job["id"], job["tenant_subject"]),
         )
+        CompressionWorker._audit_worker_failure(
+            connection,
+            str(job["tenant_subject"]),
+            str(job["project_id"]),
+            "compression",
+            str(job["id"]),
+            code,
+            "FAILED_TERMINAL",
+            int(job["attempt"]),
+        )
         connection.commit()
 
     @staticmethod
@@ -1171,15 +1179,65 @@ class CompressionWorker:
         tenant_subject: str,
         code: str,
     ) -> None:
-        connection.execute(
+        updated = connection.execute(
             """
             UPDATE decompression_jobs
             SET status = 'FAILED_TERMINAL', error_code = %s, completed_at = now()
             WHERE id = %s AND tenant_subject = %s
+            RETURNING project_id, attempt
             """,
             (code, decompression_id, tenant_subject),
-        )
+        ).fetchone()
+        if updated:
+            CompressionWorker._audit_worker_failure(
+                connection,
+                tenant_subject,
+                str(updated["project_id"]),
+                "decompression",
+                decompression_id,
+                code,
+                "FAILED_TERMINAL",
+                int(updated["attempt"]),
+            )
         connection.commit()
+
+    @staticmethod
+    def _audit_worker_failure(
+        connection: psycopg.Connection[Any],
+        tenant_subject: str,
+        project_id: str,
+        job_type: str,
+        job_id: str,
+        code: str,
+        status: str,
+        attempt: int,
+    ) -> None:
+        resource_types = {
+            "compression": "compression_job",
+            "decompression": "decompression_job",
+            "capsule": "capsule",
+        }
+        try:
+            resource_type = resource_types[job_type]
+        except KeyError as error:
+            raise ValueError("unsupported audited worker job type") from error
+        connection.execute(
+            """
+            INSERT INTO audit_events (
+              tenant_subject, project_id, actor_subject, action, resource_type,
+              resource_id, request_id, outcome, metadata
+            ) VALUES (%s, %s, 'compression-worker', %s, %s, %s, %s, 'error', %s)
+            """,
+            (
+                tenant_subject,
+                project_id,
+                f"{job_type}.failed",
+                resource_type,
+                job_id,
+                f"worker:{job_id}",
+                json.dumps({"attempt": attempt, "error_code": code, "status": status}),
+            ),
+        )
 
     def _recover_compression_job(
         self, connection: psycopg.Connection[Any], job: dict[str, Any]
@@ -1219,6 +1277,16 @@ class CompressionWorker:
                 WHERE id = %s AND tenant_subject = %s
                 """,
                 (next_attempt, job["id"], job["tenant_subject"]),
+            )
+            self._audit_worker_failure(
+                connection,
+                str(job["tenant_subject"]),
+                str(job["project_id"]),
+                "compression",
+                str(job["id"]),
+                "RETRY_EXHAUSTED",
+                "FAILED_TERMINAL",
+                next_attempt,
             )
             connection.commit()
             return False
@@ -1281,6 +1349,16 @@ class CompressionWorker:
                 terminal_query,
                 (next_attempt, job["id"], job["tenant_subject"]),
             )
+            self._audit_worker_failure(
+                connection,
+                str(job["tenant_subject"]),
+                str(job["project_id"]),
+                "capsule" if table == "capsules" else "decompression",
+                str(job["id"]),
+                "RETRY_EXHAUSTED",
+                "FAILED_TERMINAL",
+                next_attempt,
+            )
             connection.commit()
             return False
         connection.execute(
@@ -1300,7 +1378,7 @@ class CompressionWorker:
                 )
 
     def _fail_job(self, stream: str, job_id: str, tenant_subject: str, code: str) -> bool:
-        with psycopg.connect(self.settings.database_url) as connection:
+        with psycopg.connect(self.settings.database_url, row_factory=dict_row) as connection:
             if stream == COMPRESSION_STREAM:
                 row = connection.execute(
                     """
@@ -1315,7 +1393,7 @@ class CompressionWorker:
                         attempt = attempt + 1
                     WHERE id = %s AND tenant_subject = %s
                       AND status NOT IN ('COMPLETED', 'FAILED_TERMINAL', 'CANCELLED')
-                    RETURNING status
+                    RETURNING status, project_id, error_code, attempt
                     """,
                     (
                         self.settings.worker_max_attempts,
@@ -1338,7 +1416,7 @@ class CompressionWorker:
                         attempt = attempt + 1
                     WHERE id = %s AND tenant_subject = %s
                       AND status NOT IN ('COMPLETED', 'FAILED_TERMINAL')
-                    RETURNING status
+                    RETURNING status, project_id, error_code, attempt
                     """,
                     (
                         self.settings.worker_max_attempts,
@@ -1361,7 +1439,7 @@ class CompressionWorker:
                         attempt = attempt + 1
                     WHERE id = %s AND tenant_subject = %s
                       AND status NOT IN ('COMPLETED', 'FAILED_TERMINAL')
-                    RETURNING status
+                    RETURNING status, project_id, error_code, attempt
                     """,
                     (
                         self.settings.worker_max_attempts,
@@ -1374,5 +1452,21 @@ class CompressionWorker:
                 ).fetchone()
             else:
                 raise ValueError("unknown worker stream")
+            if row is not None:
+                job_type = {
+                    COMPRESSION_STREAM: "compression",
+                    DECOMPRESSION_STREAM: "decompression",
+                    CAPSULE_STREAM: "capsule",
+                }[stream]
+                self._audit_worker_failure(
+                    connection,
+                    tenant_subject,
+                    str(row["project_id"]),
+                    job_type,
+                    job_id,
+                    str(row["error_code"]),
+                    str(row["status"]),
+                    int(row["attempt"]),
+                )
             connection.commit()
-            return row is None or row[0] == "FAILED_TERMINAL"
+            return row is None or row["status"] == "FAILED_TERMINAL"
