@@ -12,13 +12,14 @@ The lockfiles generated during implementation are the authoritative dependency i
 | PostgreSQL | Relational database | PostgreSQL | Runtime service |
 | Valkey | Queue and rate-limit store | BSD-3-Clause | Runtime service |
 | MinIO | Local S3-compatible storage | AGPL-3.0 | Separate runtime service; not linked or redistributed in application images |
-| FFmpeg | Media probing/encoding | LGPL-2.1-or-later or GPL build-dependent | CPU image must use an LGPL-compatible build; exact configure flags recorded in SBOM |
-| Brotli | Text compression | MIT | Planned |
-| Zstandard | Text compression | BSD-3-Clause | Planned |
-| libavif / AOM | Image baseline | BSD-2-Clause / BSD-3-Clause | Planned |
-| libjxl | Image baseline | BSD-3-Clause | Optional |
-| Opus | Audio baseline | BSD-3-Clause | Planned |
-| Rust crates | Capsule format/planner | Per lockfile and generated SBOM | Planned |
+| FFmpeg 9.0.1 | Media probing/encoding | LGPL-2.1-or-later | Source-built in the worker image with the official release signature verified and `--disable-gpl`; exact flags are visible via `ffmpeg -buildconf` |
+| dav1d | AV1 software decoding | BSD-2-Clause | Linked into the worker's FFmpeg build |
+| SVT-AV1 | AV1 software encoding | BSD-3-Clause | Linked into the worker's FFmpeg build |
+| Brotli | Text compression | MIT | Python worker dependency |
+| Zstandard | Text compression | BSD-3-Clause | Python worker dependency |
+| libavif / AOM | Image baseline | BSD-2-Clause / BSD-3-Clause | Worker runtime tools |
+| libjxl | Image baseline | BSD-3-Clause | Worker runtime tools |
+| Opus | Audio baseline | BSD-3-Clause | Linked into the worker's FFmpeg build |
+| Rust crates | Capsule format/planner | Per lockfile and generated SBOM | Implemented; release SBOM pending |
 
 Do not infer a model-weight license from its implementation repository.
-
