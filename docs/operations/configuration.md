@@ -16,6 +16,12 @@ Deliveries use a stable JSON event body and `webhook-id`, `webhook-timestamp`, a
 
 Production refuses development authentication bypasses. Protected E2E CI supplies a Clerk test instance; forks run the verifier contract suite without external secrets.
 
+## Observability
+
+The API exposes Prometheus text format at `GET /metrics` and requires `Authorization: Bearer <METRICS_BEARER_TOKEN>` in production. The worker exposes `/health/live`, `/health/ready` and `/metrics` only on its internal port 8000; do not publish that port without an authenticated collector proxy or equivalent network policy. Metrics use bounded labels and never include tenant, API-key, object-key or payload values.
+
+Set `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` to the collector's full HTTP trace endpoint, including `/v1/traces`, to enable OTLP export. The API initializes HTTP, Fastify, PostgreSQL and Redis instrumentation before loading the application. W3C trace context and the request ID are injected into Valkey job messages and extracted by the worker. Worker spans contain job type, opaque job ID and request ID, but no tenant subject, content or secret. With no OTLP endpoint configured, tracing is a deliberate no-op while metrics and request IDs remain available.
+
 ## Storage and retention
 
 Buckets must be private, encrypted and deny anonymous listing. Signed URLs default to five minutes. `DELETE_ORIGINALS_AFTER_SECONDS=0` means delete after successful verification; a positive value schedules bounded retention. Deletion preserves only content-free audit facts.

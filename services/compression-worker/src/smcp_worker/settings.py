@@ -17,3 +17,9 @@ class Settings(BaseSettings):
     worker_group: str = "compression-workers"
     worker_block_ms: int = Field(default=5_000, ge=100, le=60_000)
     max_upload_bytes: int = Field(default=1_073_741_824, gt=0)
+    # Container-internal health endpoint; Compose does not publish this port.
+    worker_health_host: str = "0.0.0.0"  # noqa: S104
+    worker_health_port: int = Field(default=8000, ge=1, le=65_535)
+    environment: str = "development"
+    otel_service_name: str = "smcp-compression-worker"
+    otel_exporter_otlp_traces_endpoint: str | None = None
