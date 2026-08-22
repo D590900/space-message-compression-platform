@@ -6,6 +6,12 @@ COPY crates crates
 RUN cargo build --locked --release -p smcp-capsule-cli
 
 FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241 AS runtime
+ARG VCS_REF=unknown
+ARG VERSION=0.0.0-dev
+LABEL org.opencontainers.image.source="https://github.com/D590900/space-message-compression-platform" \
+      org.opencontainers.image.revision="$VCS_REF" \
+      org.opencontainers.image.version="$VERSION" \
+      org.opencontainers.image.licenses="Apache-2.0"
 RUN apt-get update \
     && apt-get upgrade -y --no-install-recommends \
     && apt-get clean \

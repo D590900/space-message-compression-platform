@@ -56,6 +56,12 @@ RUN uv sync --frozen --no-dev \
     && /opt/venv/bin/python -m smcp_worker.model_manifest validate model-manifests/catalog.json
 
 FROM python:3.12.13-slim-bookworm@sha256:4766d8b510c428e595d74b9cc5bbb2fae8e26316fffb4adc89908d79aacd58a2 AS runtime
+ARG VCS_REF=unknown
+ARG VERSION=0.0.0-dev
+LABEL org.opencontainers.image.source="https://github.com/D590900/space-message-compression-platform" \
+      org.opencontainers.image.revision="$VCS_REF" \
+      org.opencontainers.image.version="$VERSION" \
+      org.opencontainers.image.licenses="Apache-2.0"
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH=/opt/venv/bin:$PATH

@@ -34,7 +34,7 @@ The initial scan findings were fixed rather than suppressed: outdated Debian run
 
 ## Automated enforcement
 
-CI installs a checksum-pinned Gitleaks binary and scans full history plus the checkout. Source and image Trivy jobs fail on fixed HIGH/CRITICAL findings. Release builds scan a locally loaded candidate before any corresponding image is pushed, then publish SBOM and provenance attestations.
+CI installs a checksum-pinned Gitleaks binary and scans full history plus the checkout. Source and image Trivy jobs fail on fixed HIGH/CRITICAL findings. Each release image is built exactly once, loaded locally, scanned, and used to generate an SPDX JSON SBOM before that same local image is pushed. The registry digest is then bound to separate provenance and SBOM attestations. All three SPDX files are retained as workflow artifacts, attached to the GitHub release, and covered by `SHA256SUMS` alongside the source archive.
 
 ## Open release gates
 
