@@ -150,3 +150,77 @@ def test_candidate_selection_enforces_target_bytes_with_a_stable_tie_break() -> 
         90,
         "object-a",
     )
+
+
+def test_retention_retry_backoff_is_bounded() -> None:
+    assert CompressionWorker._retention_retry_seconds(1) == 30
+    assert CompressionWorker._retention_retry_seconds(4) == 240
+    assert CompressionWorker._retention_retry_seconds(100) == 3_600
+
+
+def test_due_original_is_deleted_and_audited(monkeypatch: pytest.MonkeyPatch) -> None:
+    worker = bare_worker()
+    worker.settings.database_url = "postgresql://unused"
+    worker.settings.deletion_batch_size = 20
+    worker.settings.s3_bucket = "private"
+    worker.s3 = MagicMock()
+    row = {
+        "id": "00000000-0000-0000-0000-000000000001",
+        "tenant_subject": "org_test",
+        "project_id": "00000000-0000-0000-0000-000000000002",
+        "object_key": "private/source",
+        "deletion_attempt": 0,
+    }
+    claim_cursor = MagicMock()
+    claim_cursor.fetchall.return_value = [row]
+    delete_cursor = MagicMock()
+    delete_cursor.fetchone.return_value = {"id": row["id"]}
+    connection = MagicMock()
+    connection.execute.side_effect = [claim_cursor, delete_cursor, MagicMock()]
+    manager = MagicMock()
+    manager.__enter__.return_value = connection
+    monkeypatch.setattr("smcp_worker.worker.psycopg.connect", lambda *args, **kwargs: manager)
+
+    worker._delete_due_originals()
+
+    worker.s3.delete_object.assert_called_once_with(Bucket="private", Key="private/source")
+    audit_parameters = connection.execute.call_args_list[2].args[1]
+    assert audit_parameters[0:3] == (
+        "org_test",
+        "00000000-0000-0000-0000-000000000002",
+        "00000000-0000-0000-0000-000000000001",
+    )
+    assert audit_parameters[4] == '{"deletion_attempt": 1}'
+
+
+def test_original_deletion_failure_is_redacted_and_rescheduled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = bare_worker()
+    worker.settings.database_url = "postgresql://unused"
+    worker.settings.deletion_batch_size = 20
+    worker.settings.s3_bucket = "private"
+    worker.s3 = MagicMock()
+    worker.s3.delete_object.side_effect = TimeoutError("sensitive upstream detail")
+    claim_cursor = MagicMock()
+    claim_cursor.fetchall.return_value = [
+        {
+            "id": "00000000-0000-0000-0000-000000000001",
+            "tenant_subject": "org_test",
+            "project_id": "00000000-0000-0000-0000-000000000002",
+            "object_key": "private/source",
+            "deletion_attempt": 1,
+        }
+    ]
+    connection = MagicMock()
+    connection.execute.side_effect = [claim_cursor, MagicMock()]
+    manager = MagicMock()
+    manager.__enter__.return_value = connection
+    monkeypatch.setattr("smcp_worker.worker.psycopg.connect", lambda *args, **kwargs: manager)
+
+    worker._delete_due_originals()
+
+    retry_parameters = connection.execute.call_args_list[1].args[1]
+    assert retry_parameters[0:3] == (2, "TimeoutError", 60)
+    assert "sensitive upstream detail" not in repr(retry_parameters)
+    connection.rollback.assert_called_once()

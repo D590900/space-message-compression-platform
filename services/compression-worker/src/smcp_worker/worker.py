@@ -149,6 +149,7 @@ class CompressionWorker:
         if on_ready is not None:
             on_ready()
         while True:
+            self._delete_due_originals()
             messages = self._claim_stale_messages()
             if not messages:
                 messages = cast(
@@ -515,6 +516,24 @@ class CompressionWorker:
                     "selected_candidate_id": selected_id,
                     "payload_bytes": selected_bytes,
                 },
+            )
+            connection.execute(
+                """
+                UPDATE source_objects AS source
+                SET delete_after = now() + (
+                  COALESCE(project.original_retention_seconds, %s) * interval '1 second'
+                )
+                FROM projects AS project
+                WHERE source.id = %s AND source.tenant_subject = %s
+                  AND project.id = source.project_id
+                  AND project.tenant_subject = source.tenant_subject
+                  AND source.delete_after IS NULL
+                """,
+                (
+                    self.settings.delete_originals_after_seconds,
+                    job["source_object_id"],
+                    tenant_subject,
+                ),
             )
             connection.commit()
 
@@ -1393,6 +1412,105 @@ class CompressionWorker:
                     Bucket=self.settings.s3_bucket,
                     Delete={"Objects": [{"Key": key} for key in chunk], "Quiet": True},
                 )
+
+    @staticmethod
+    def _retention_retry_seconds(attempt: int) -> int:
+        return int(min(3_600, 30 * (2 ** max(0, attempt - 1))))
+
+    def _delete_due_originals(self) -> None:
+        claim_token = str(uuid4())
+        with psycopg.connect(self.settings.database_url, row_factory=dict_row) as connection:
+            rows = connection.execute(
+                """
+                WITH due AS (
+                  SELECT id
+                  FROM source_objects
+                  WHERE delete_after <= now() AND deleted_at IS NULL
+                    AND (
+                      deletion_claimed_at IS NULL
+                      OR deletion_claimed_at < now() - interval '5 minutes'
+                    )
+                  ORDER BY delete_after, id
+                  FOR UPDATE SKIP LOCKED
+                  LIMIT %s
+                )
+                UPDATE source_objects AS source
+                SET deletion_claimed_at = now(), deletion_claim_token = %s,
+                    deletion_error_redacted = NULL
+                FROM due
+                WHERE source.id = due.id
+                RETURNING source.id, source.tenant_subject, source.project_id,
+                          source.object_key, source.deletion_attempt
+                """,
+                (self.settings.deletion_batch_size, claim_token),
+            ).fetchall()
+            connection.commit()
+            for row in rows:
+                source_id = str(row["id"])
+                try:
+                    self.s3.delete_object(
+                        Bucket=self.settings.s3_bucket,
+                        Key=str(row["object_key"]),
+                    )
+                    deleted = connection.execute(
+                        """
+                        UPDATE source_objects
+                        SET deleted_at = now(), deletion_attempt = deletion_attempt + 1,
+                            deletion_claimed_at = NULL, deletion_claim_token = NULL,
+                            deletion_error_redacted = NULL
+                        WHERE id = %s AND tenant_subject = %s
+                          AND deleted_at IS NULL AND deletion_claim_token = %s
+                        RETURNING id
+                        """,
+                        (source_id, row["tenant_subject"], claim_token),
+                    ).fetchone()
+                    if deleted is None:
+                        connection.rollback()
+                        continue
+                    connection.execute(
+                        """
+                        INSERT INTO audit_events (
+                          tenant_subject, project_id, actor_subject, action,
+                          resource_type, resource_id, request_id, outcome, metadata
+                        ) VALUES (
+                          %s, %s, 'compression-worker', 'source.deleted',
+                          'source_object', %s, %s, 'success', %s
+                        )
+                        """,
+                        (
+                            row["tenant_subject"],
+                            row["project_id"],
+                            source_id,
+                            f"worker-retention:{claim_token}:{source_id}",
+                            json.dumps({"deletion_attempt": int(row["deletion_attempt"]) + 1}),
+                        ),
+                    )
+                except Exception as error:
+                    connection.rollback()
+                    attempt = int(row["deletion_attempt"]) + 1
+                    LOGGER.warning(
+                        "original deletion failed",
+                        extra={"source_id": source_id, "error_class": type(error).__name__},
+                    )
+                    connection.execute(
+                        """
+                        UPDATE source_objects
+                        SET deletion_attempt = %s, deletion_claimed_at = NULL,
+                            deletion_claim_token = NULL, deletion_error_redacted = %s,
+                            delete_after = now() + (%s * interval '1 second')
+                        WHERE id = %s AND tenant_subject = %s AND deleted_at IS NULL
+                          AND deletion_claim_token = %s
+                        """,
+                        (
+                            attempt,
+                            type(error).__name__,
+                            self._retention_retry_seconds(attempt),
+                            source_id,
+                            row["tenant_subject"],
+                            claim_token,
+                        ),
+                    )
+                connection.commit()
 
     def _fail_job(self, stream: str, job_id: str, tenant_subject: str, code: str) -> bool:
         with psycopg.connect(self.settings.database_url, row_factory=dict_row) as connection:
