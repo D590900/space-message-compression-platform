@@ -1,0 +1,314 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import time
+from dataclasses import asdict
+from pathlib import Path
+from typing import Any, cast
+from uuid import uuid4
+
+import boto3
+import psycopg
+from botocore.config import Config
+from psycopg.rows import dict_row
+from redis import Redis
+from redis.exceptions import ResponseError
+
+from smcp_worker.adapters import text as text_module
+from smcp_worker.adapters.text import generate_text_candidates
+from smcp_worker.models import Profile, SourceObject
+from smcp_worker.settings import Settings
+
+LOGGER = logging.getLogger(__name__)
+STREAM = "smcp:compression-jobs"
+
+
+class CompressionWorker:
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+        self.redis: Redis = Redis.from_url(settings.valkey_url, decode_responses=True)
+        self.s3 = boto3.client(
+            "s3",
+            endpoint_url=settings.s3_endpoint,
+            region_name=settings.s3_region,
+            aws_access_key_id=settings.s3_access_key_id,
+            aws_secret_access_key=settings.s3_secret_access_key,
+            config=Config(
+                s3={"addressing_style": "path" if settings.s3_force_path_style else "virtual"}
+            ),
+        )
+
+    def ensure_group(self) -> None:
+        try:
+            self.redis.xgroup_create(STREAM, self.settings.worker_group, id="0", mkstream=True)
+        except ResponseError as error:
+            if "BUSYGROUP" not in str(error):
+                raise
+
+    def run_forever(self) -> None:
+        self.ensure_group()
+        while True:
+            messages = cast(
+                list[tuple[str, list[tuple[str, dict[str, str]]]]],
+                self.redis.xreadgroup(
+                    self.settings.worker_group,
+                    self.settings.worker_consumer_name,
+                    {STREAM: ">"},
+                    count=1,
+                    block=self.settings.worker_block_ms,
+                ),
+            )
+            for _stream, entries in messages:
+                for message_id, fields in entries:
+                    self.process_message(message_id, fields)
+
+    def process_message(self, message_id: str, fields: dict[str, str]) -> None:
+        job_id = fields.get("job_id")
+        tenant_subject = fields.get("tenant_subject")
+        if not job_id or not tenant_subject:
+            LOGGER.error("rejecting malformed queue message", extra={"message_id": message_id})
+            self.redis.xack(STREAM, self.settings.worker_group, message_id)
+            return
+        try:
+            self.process_job(job_id, tenant_subject)
+        except Exception:
+            LOGGER.exception("compression job failed", extra={"job_id": job_id})
+            self._fail_job(job_id, tenant_subject, "WORKER_FAILURE")
+            raise
+        else:
+            self.redis.xack(STREAM, self.settings.worker_group, message_id)
+
+    def process_job(self, job_id: str, tenant_subject: str) -> None:
+        with psycopg.connect(self.settings.database_url, row_factory=dict_row) as connection:
+            job = connection.execute(
+                """
+                SELECT j.*, s.object_key, s.declared_mime, s.expected_bytes,
+                       s.sha256 AS expected_sha256
+                FROM compression_jobs j
+                JOIN source_objects s
+                  ON s.id = j.source_object_id AND s.tenant_subject = j.tenant_subject
+                WHERE j.id = %s AND j.tenant_subject = %s
+                """,
+                (job_id, tenant_subject),
+            ).fetchone()
+            if not job:
+                raise ValueError("job does not exist for tenant")
+            if job["status"] in {"COMPLETED", "FAILED_TERMINAL", "CANCELLED"}:
+                return
+            if job["input_type"] != "TEXT":
+                self._terminal_failure(connection, job, "CODEC_UNAVAILABLE")
+                return
+
+            self._transition(connection, job_id, tenant_subject, "PENDING", "VALIDATING")
+            response = self.s3.get_object(Bucket=self.settings.s3_bucket, Key=job["object_key"])
+            source_bytes = response["Body"].read(self.settings.max_upload_bytes + 1)
+            if len(source_bytes) > self.settings.max_upload_bytes:
+                self._terminal_failure(connection, job, "INPUT_TOO_LARGE")
+                return
+            if len(source_bytes) != job["expected_bytes"]:
+                self._terminal_failure(connection, job, "SIZE_MISMATCH")
+                return
+            digest = hashlib.sha256(source_bytes).digest()
+            expected_digest = job["expected_sha256"]
+            if expected_digest is not None and bytes(expected_digest) != digest:
+                self._terminal_failure(connection, job, "HASH_MISMATCH")
+                return
+            connection.execute(
+                """
+                UPDATE source_objects
+                SET actual_bytes = %s, sha256 = %s,
+                    detected_mime = 'text/plain', validated_at = now()
+                WHERE id = %s AND tenant_subject = %s
+                """,
+                (len(source_bytes), digest, job["source_object_id"], tenant_subject),
+            )
+            connection.commit()
+
+            self._transition(connection, job_id, tenant_subject, "VALIDATING", "PREPROCESSING")
+            source = SourceObject(source_bytes, job["declared_mime"], job["object_key"])
+            self._transition(connection, job_id, tenant_subject, "PREPROCESSING", "ENCODING")
+            started = time.perf_counter_ns()
+            candidates = generate_text_candidates(source, Profile(job["profile"]))
+            encode_duration_ms = max(0, (time.perf_counter_ns() - started) // 1_000_000)
+            self._transition(connection, job_id, tenant_subject, "ENCODING", "MEASURING")
+
+            persisted: list[tuple[str, int, str]] = []
+            implementation_hash = hashlib.sha256(Path(text_module.__file__).read_bytes()).digest()
+            for candidate, report in candidates:
+                candidate_id = str(uuid4())
+                object_key = f"{tenant_subject}/{job['project_id']}/candidates/{candidate_id}.bin"
+                self.s3.put_object(
+                    Bucket=self.settings.s3_bucket,
+                    Key=object_key,
+                    Body=candidate.payload,
+                    ContentType="application/vnd.smcp.candidate",
+                    ServerSideEncryption="AES256",
+                    Metadata={
+                        "sha256": hashlib.sha256(candidate.payload).hexdigest(),
+                        "codec-id": candidate.codec_id,
+                    },
+                )
+                config_bytes = json.dumps(
+                    candidate.config, sort_keys=True, separators=(",", ":")
+                ).encode()
+                connection.execute(
+                    """
+                    INSERT INTO codec_registry (
+                      id, version, content_type, implementation_sha256,
+                      deterministic, enabled, capability
+                    ) VALUES (%s, %s, 'TEXT', %s, true, true, %s)
+                    ON CONFLICT (id, version) DO UPDATE
+                    SET implementation_sha256 = EXCLUDED.implementation_sha256,
+                        enabled = true,
+                        disabled_reason = NULL,
+                        capability = EXCLUDED.capability
+                    """,
+                    (
+                        candidate.codec_id,
+                        candidate.codec_version,
+                        implementation_hash,
+                        json.dumps(
+                            {
+                                "profiles": ["faithful", "ultra"],
+                                "round_trip": "byte_exact",
+                                "device": "cpu",
+                            }
+                        ),
+                    ),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO encoding_candidates (
+                      id, tenant_subject, job_id, codec_id, codec_version,
+                      config_hash, profile, payload_bytes, container_overhead_bytes,
+                      quality_metrics, quality_gate_passed, encode_duration_ms,
+                      decode_duration_ms, hardware, determinism_status, object_key, sha256
+                    ) VALUES (
+                      %s, %s, %s, %s, %s, %s, %s, %s, 0, %s, true, %s, 0,
+                      %s, 'BIT_EXACT', %s, %s
+                    )
+                    ON CONFLICT (id) DO NOTHING
+                    """,
+                    (
+                        candidate_id,
+                        tenant_subject,
+                        job_id,
+                        candidate.codec_id,
+                        candidate.codec_version,
+                        hashlib.sha256(config_bytes).digest(),
+                        job["profile"],
+                        len(candidate.payload),
+                        json.dumps(asdict(report), sort_keys=True),
+                        encode_duration_ms,
+                        json.dumps({"runtime": "python", "device": "cpu"}),
+                        object_key,
+                        hashlib.sha256(candidate.payload).digest(),
+                    ),
+                )
+                persisted.append((candidate_id, len(candidate.payload), object_key))
+            connection.commit()
+
+            self._transition(connection, job_id, tenant_subject, "MEASURING", "SELECTING")
+            selected_id, selected_bytes, selected_key = min(
+                persisted, key=lambda item: (item[1], item[0])
+            )
+            artifact_id = str(uuid4())
+            connection.execute(
+                """
+                INSERT INTO artifacts (
+                  id, tenant_subject, job_id, candidate_id, kind, object_key, bytes, sha256
+                )
+                SELECT %s, tenant_subject, job_id, id, 'compressed', object_key,
+                       payload_bytes, sha256
+                FROM encoding_candidates
+                WHERE id = %s AND tenant_subject = %s
+                """,
+                (artifact_id, selected_id, tenant_subject),
+            )
+            connection.commit()
+            self._transition(connection, job_id, tenant_subject, "SELECTING", "PACKAGING")
+            updated = connection.execute(
+                """
+                UPDATE compression_jobs
+                SET status = 'COMPLETED', selected_candidate_id = %s, completed_at = now()
+                WHERE id = %s AND tenant_subject = %s AND status = 'PACKAGING'
+                RETURNING project_id
+                """,
+                (selected_id, job_id, tenant_subject),
+            ).fetchone()
+            if not updated:
+                connection.rollback()
+                raise RuntimeError("job state changed before completion")
+            connection.execute(
+                """
+                INSERT INTO audit_events (
+                  tenant_subject, project_id, actor_subject, action, resource_type,
+                  resource_id, request_id, outcome, metadata
+                ) VALUES (%s, %s, 'compression-worker', 'compression.completed',
+                          'compression_job', %s, %s, 'success', %s)
+                """,
+                (
+                    tenant_subject,
+                    updated["project_id"],
+                    job_id,
+                    f"worker:{job_id}",
+                    json.dumps(
+                        {
+                            "selected_candidate_id": selected_id,
+                            "payload_bytes": selected_bytes,
+                            "object_key_hash": hashlib.sha256(selected_key.encode()).hexdigest(),
+                        }
+                    ),
+                ),
+            )
+            connection.commit()
+
+    @staticmethod
+    def _transition(
+        connection: psycopg.Connection[Any],
+        job_id: str,
+        tenant_subject: str,
+        expected: str,
+        target: str,
+    ) -> None:
+        updated = connection.execute(
+            """
+            UPDATE compression_jobs
+            SET status = %s, started_at = COALESCE(started_at, now())
+            WHERE id = %s AND tenant_subject = %s AND status = %s
+            RETURNING id
+            """,
+            (target, job_id, tenant_subject, expected),
+        ).fetchone()
+        if not updated:
+            connection.rollback()
+            raise RuntimeError(f"invalid job transition {expected} -> {target}")
+        connection.commit()
+
+    @staticmethod
+    def _terminal_failure(
+        connection: psycopg.Connection[Any], job: dict[str, Any], code: str
+    ) -> None:
+        connection.execute(
+            """
+            UPDATE compression_jobs
+            SET status = 'FAILED_TERMINAL', error_code = %s, completed_at = now()
+            WHERE id = %s AND tenant_subject = %s
+            """,
+            (code, job["id"], job["tenant_subject"]),
+        )
+        connection.commit()
+
+    def _fail_job(self, job_id: str, tenant_subject: str, code: str) -> None:
+        with psycopg.connect(self.settings.database_url) as connection:
+            connection.execute(
+                """
+                UPDATE compression_jobs
+                SET status = 'FAILED_RETRYABLE', error_code = %s, attempt = attempt + 1
+                WHERE id = %s AND tenant_subject = %s
+                  AND status NOT IN ('COMPLETED', 'FAILED_TERMINAL', 'CANCELLED')
+                """,
+                (code, job_id, tenant_subject),
+            )
