@@ -16,9 +16,8 @@ An API-first platform for producing reproducible, quality-gated compressed artif
 
 The CPU compose profile runs the Next.js dashboard, Fastify API, Python worker, PostgreSQL, Valkey and MinIO. Clerk is the identity and API-key authority and requires a configured development instance. Neural codecs are optional and never downloaded during build or import.
 
-The executable quickstart will be published with M1. For architecture and security decisions, start with [`docs/architecture/system.md`](docs/architecture/system.md) and [`docs/security/threat-model.md`](docs/security/threat-model.md).
+The API, worker, storage and capsule stack is executable with Compose; the dashboard remains in progress. Supported TypeScript, Python and CLI usage is documented in [`docs/operations/clients.md`](docs/operations/clients.md). For architecture and security decisions, start with [`docs/architecture/system.md`](docs/architecture/system.md) and [`docs/security/threat-model.md`](docs/security/threat-model.md).
 
 ## License
 
 Apache-2.0. Third-party code and model licensing are tracked separately in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and [`MODEL_LICENSES.md`](MODEL_LICENSES.md).
-
