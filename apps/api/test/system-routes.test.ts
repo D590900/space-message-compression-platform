@@ -162,4 +162,220 @@ describe("system capability routes", () => {
       "success",
     );
   });
+
+  it("accepts an authenticated organization session without exposing an API key", async () => {
+    const verifyApiKey = vi.fn();
+    const authenticateSession = vi.fn(() =>
+      Promise.resolve({
+        kind: "session" as const,
+        tenantSubject: "org_dashboard",
+        actorSubject: "user_dashboard",
+      }),
+    );
+    const sessionClerk = {
+      ...clerk,
+      verifyApiKey,
+      authenticateSession,
+    };
+    const listCodecCapabilities = vi.fn(() => Promise.resolve([]));
+    const createCompressionJob = vi.fn(() =>
+      Promise.resolve({ created: true, job: { id: "job_session" } }),
+    );
+    const auditApiKeyUsage = vi.fn(() => Promise.resolve());
+    const database = {
+      listCodecCapabilities,
+      createCompressionJob,
+      auditApiKeyUsage,
+      close: () => Promise.resolve(),
+    } as unknown as Database;
+    const consume = vi.fn(() => Promise.resolve());
+    const { app } = await buildApp(config, {
+      database,
+      queue: {
+        publishCompression: vi.fn(() => Promise.resolve("1-0")),
+        close: () => Promise.resolve(),
+      } as unknown as JobQueue,
+      storage: {} as ObjectStorage,
+      clerk: sessionClerk,
+      rateLimiter: {
+        consume,
+        close: () => Promise.resolve(),
+      },
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/codecs",
+      headers: { authorization: "Bearer clerk-session-token" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(listCodecCapabilities).toHaveBeenCalledOnce();
+    expect(authenticateSession).toHaveBeenCalledOnce();
+    expect(verifyApiKey).not.toHaveBeenCalled();
+    expect(auditApiKeyUsage).not.toHaveBeenCalled();
+    expect(consume).toHaveBeenCalledWith(
+      "org_dashboard",
+      "session:user_dashboard",
+      "GET",
+      "/v1/codecs",
+    );
+
+    const compression = await app.inject({
+      method: "POST",
+      url: "/v1/compressions",
+      headers: {
+        authorization: "Bearer clerk-session-token",
+        "idempotency-key": "session-job-0001",
+      },
+      payload: {
+        project_id: "85bd5e09-a8fb-4d2c-a560-5d2365badf84",
+        source_object_id: "2d0610bd-4567-41ab-9a7a-8a5fd320c7ce",
+        input_type: "TEXT",
+        profile: "faithful",
+      },
+    });
+    expect(compression.statusCode).toBe(202);
+    expect(createCompressionJob).toHaveBeenCalledWith(
+      "org_dashboard",
+      "user_dashboard",
+      null,
+      expect.any(String),
+      "session-job-0001",
+      expect.objectContaining({ input_type: "TEXT" }),
+    );
+  });
+
+  it("lists dashboard resources through bounded tenant-scoped pages", async () => {
+    const projectId = "85bd5e09-a8fb-4d2c-a560-5d2365badf84";
+    const sessionClerk = {
+      ...clerk,
+      authenticateSession: () =>
+        Promise.resolve({
+          kind: "session" as const,
+          tenantSubject: "org_dashboard",
+          actorSubject: "user_dashboard",
+        }),
+    };
+    const listProjects = vi.fn(() =>
+      Promise.resolve({ totalCount: 0, data: [] }),
+    );
+    const listCompressionJobs = vi.fn(() =>
+      Promise.resolve({ totalCount: 0, data: [] }),
+    );
+    const listArtifacts = vi.fn(() =>
+      Promise.resolve({ totalCount: 0, data: [] }),
+    );
+    const listCapsules = vi.fn(() =>
+      Promise.resolve({ totalCount: 0, data: [] }),
+    );
+    const updateProjectSettings = vi.fn(() =>
+      Promise.resolve({
+        id: projectId,
+        tenant_subject: "org_dashboard",
+        name: "Mission telemetry",
+        quality_policy: { image: { ms_ssim_min: 0.96 } },
+        original_retention_seconds: 86_400,
+        created_at: new Date(),
+      }),
+    );
+    const database = {
+      listProjects,
+      listCompressionJobs,
+      listArtifacts,
+      listCapsules,
+      updateProjectSettings,
+      close: () => Promise.resolve(),
+    } as unknown as Database;
+    const { app } = await buildApp(config, {
+      database,
+      queue: { close: () => Promise.resolve() } as unknown as JobQueue,
+      storage: {} as ObjectStorage,
+      clerk: sessionClerk,
+      rateLimiter,
+    });
+    apps.push(app);
+    const headers = { authorization: "Bearer clerk-session-token" };
+
+    const projects = await app.inject({
+      method: "GET",
+      url: "/v1/projects?limit=25&offset=5",
+      headers,
+    });
+    const jobs = await app.inject({
+      method: "GET",
+      url: `/v1/compressions?project_id=${projectId}&limit=20`,
+      headers,
+    });
+    const artifacts = await app.inject({
+      method: "GET",
+      url: `/v1/artifacts?project_id=${projectId}`,
+      headers,
+    });
+    const capsules = await app.inject({
+      method: "GET",
+      url: `/v1/capsules?project_id=${projectId}&offset=2`,
+      headers,
+    });
+    const settings = await app.inject({
+      method: "PATCH",
+      url: `/v1/projects/${projectId}/settings`,
+      headers: { ...headers, "content-type": "application/json" },
+      payload: {
+        quality_policy: { image: { ms_ssim_min: 0.96 } },
+        original_retention_seconds: 86_400,
+      },
+    });
+
+    expect([
+      projects.statusCode,
+      jobs.statusCode,
+      artifacts.statusCode,
+      capsules.statusCode,
+      settings.statusCode,
+    ]).toEqual([200, 200, 200, 200, 200]);
+    expect(projects.json()).toMatchObject({
+      total_count: 0,
+      limit: 25,
+      offset: 5,
+    });
+    expect(listProjects).toHaveBeenCalledWith("org_dashboard", 25, 5);
+    expect(listCompressionJobs).toHaveBeenCalledWith(
+      "org_dashboard",
+      projectId,
+      20,
+      0,
+    );
+    expect(listArtifacts).toHaveBeenCalledWith(
+      "org_dashboard",
+      projectId,
+      50,
+      0,
+    );
+    expect(listCapsules).toHaveBeenCalledWith(
+      "org_dashboard",
+      projectId,
+      50,
+      2,
+    );
+    expect(updateProjectSettings).toHaveBeenCalledWith(
+      "org_dashboard",
+      "user_dashboard",
+      expect.any(String),
+      projectId,
+      {
+        quality_policy: { image: { ms_ssim_min: 0.96 } },
+        original_retention_seconds: 86_400,
+      },
+    );
+
+    const rejected = await app.inject({
+      method: "GET",
+      url: `/v1/compressions?project_id=${projectId}&limit=101`,
+      headers,
+    });
+    expect(rejected.statusCode).toBe(400);
+    expect(listCompressionJobs).toHaveBeenCalledOnce();
+  });
 });

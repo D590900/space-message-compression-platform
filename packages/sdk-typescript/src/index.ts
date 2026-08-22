@@ -9,7 +9,12 @@ export type RequestOptions = {
   signal?: AbortSignal | undefined;
 };
 
-export type Page<T> = { total_count: number; data: T[] };
+export type Page<T> = {
+  total_count: number;
+  limit?: number;
+  offset?: number;
+  data: T[];
+};
 
 export type CompressionCreate = {
   project_id: string;
@@ -112,6 +117,20 @@ export class SmcpClient {
     return this.request("POST", "v1/compressions", input, options);
   }
 
+  public compressions(
+    projectId: string,
+    limit = 50,
+    offset = 0,
+    signal?: AbortSignal,
+  ): Promise<Page<Record<string, unknown>>> {
+    return this.request(
+      "GET",
+      this.projectPagePath("v1/compressions", projectId, limit, offset),
+      undefined,
+      { signal },
+    );
+  }
+
   public compression(
     id: string,
     signal?: AbortSignal,
@@ -162,6 +181,20 @@ export class SmcpClient {
     );
   }
 
+  public artifacts(
+    projectId: string,
+    limit = 50,
+    offset = 0,
+    signal?: AbortSignal,
+  ): Promise<Page<Record<string, unknown>>> {
+    return this.request(
+      "GET",
+      this.projectPagePath("v1/artifacts", projectId, limit, offset),
+      undefined,
+      { signal },
+    );
+  }
+
   public createDecompression(
     input: { project_id: string; artifact_id: string },
     options?: RequestOptions,
@@ -205,6 +238,20 @@ export class SmcpClient {
     options?: RequestOptions,
   ): Promise<Record<string, unknown>> {
     return this.request("POST", "v1/capsules", input, options);
+  }
+
+  public capsules(
+    projectId: string,
+    limit = 50,
+    offset = 0,
+    signal?: AbortSignal,
+  ): Promise<Page<Record<string, unknown>>> {
+    return this.request(
+      "GET",
+      this.projectPagePath("v1/capsules", projectId, limit, offset),
+      undefined,
+      { signal },
+    );
   }
 
   public capsule(
@@ -281,6 +328,20 @@ export class SmcpClient {
     options?: RequestOptions,
   ): Promise<Record<string, unknown>> {
     return this.request("POST", "v1/webhooks", input, options);
+  }
+
+  private projectPagePath(
+    path: string,
+    projectId: string,
+    limit: number,
+    offset: number,
+  ): string {
+    const query = new URLSearchParams({
+      project_id: projectId,
+      limit: String(limit),
+      offset: String(offset),
+    });
+    return `${path}?${query.toString()}`;
   }
 
   private async request<T>(

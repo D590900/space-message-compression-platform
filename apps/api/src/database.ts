@@ -11,6 +11,7 @@ import type {
   JobStatus,
   PresignUploadInput,
   Profile,
+  UpdateProjectSettingsInput,
 } from "@smcp/schemas";
 import postgres from "postgres";
 
@@ -20,6 +21,8 @@ export type ProjectRecord = {
   id: string;
   tenant_subject: string;
   name: string;
+  quality_policy: Record<string, unknown>;
+  original_retention_seconds: number | null;
   created_at: Date;
 };
 
@@ -80,6 +83,7 @@ export type ArtifactRecord = {
   object_key: string;
   bytes: number;
   sha256_hex: string;
+  created_at: Date;
 };
 
 export type DecompressionJobRecord = {
@@ -298,7 +302,7 @@ export class Database {
   public async createCapsulePlan(
     tenantSubject: string,
     actorSubject: string,
-    apiKeyId: string,
+    apiKeyId: string | null,
     requestId: string,
     idempotencyKey: string,
     input: CreateCapsulePlanInput,
@@ -379,7 +383,7 @@ export class Database {
   public async createCapsuleJob(
     tenantSubject: string,
     actorSubject: string,
-    apiKeyId: string,
+    apiKeyId: string | null,
     requestId: string,
     idempotencyKey: string,
     input: CreateCapsuleInput,
@@ -531,6 +535,35 @@ export class Database {
     return rows[0];
   }
 
+  public async listCapsules(
+    tenantSubject: string,
+    projectId: string,
+    limit: number,
+    offset: number,
+  ): Promise<{ totalCount: number; data: CapsuleRecord[] }> {
+    await this.assertProject(tenantSubject, projectId);
+    const [countRows, data] = await Promise.all([
+      this.sql<{ count: number }[]>`
+        SELECT count(*)::integer AS count
+        FROM capsules
+        WHERE tenant_subject = ${tenantSubject} AND project_id = ${projectId}
+      `,
+      this.sql<CapsuleRecord[]>`
+        SELECT id, tenant_subject, project_id, plan_id, budget_bytes,
+               actual_bytes, object_key,
+               CASE WHEN sha256 IS NULL THEN NULL ELSE encode(sha256, 'hex') END AS sha256_hex,
+               CASE WHEN merkle_root IS NULL THEN NULL ELSE encode(merkle_root, 'hex') END AS merkle_root_hex,
+               format_major, format_minor, status, error_code, build_options,
+               created_at, completed_at
+        FROM capsules
+        WHERE tenant_subject = ${tenantSubject} AND project_id = ${projectId}
+        ORDER BY created_at DESC, id DESC
+        LIMIT ${limit} OFFSET ${offset}
+      `,
+    ]);
+    return { totalCount: countRows[0]?.count ?? 0, data };
+  }
+
   public async getCapsuleManifest(
     tenantSubject: string,
     id: string,
@@ -573,7 +606,8 @@ export class Database {
         INSERT INTO projects (
           id, tenant_subject, name, idempotency_key, request_fingerprint
         ) VALUES (${id}, ${tenantSubject}, ${input.name}, ${idempotencyKey}, ${fingerprint})
-        RETURNING id, tenant_subject, name, created_at
+        RETURNING id, tenant_subject, name, quality_policy,
+                  original_retention_seconds, created_at
       `;
       await transaction`
         INSERT INTO project_quotas (tenant_subject, project_id)
@@ -592,10 +626,80 @@ export class Database {
     });
   }
 
+  public async listProjects(
+    tenantSubject: string,
+    limit: number,
+    offset: number,
+  ): Promise<{ totalCount: number; data: ProjectRecord[] }> {
+    const [countRows, data] = await Promise.all([
+      this.sql<{ count: number }[]>`
+        SELECT count(*)::integer AS count
+        FROM projects
+        WHERE tenant_subject = ${tenantSubject} AND deleted_at IS NULL
+      `,
+      this.sql<ProjectRecord[]>`
+        SELECT id, tenant_subject, name, quality_policy,
+               original_retention_seconds, created_at
+        FROM projects
+        WHERE tenant_subject = ${tenantSubject} AND deleted_at IS NULL
+        ORDER BY created_at DESC, id DESC
+        LIMIT ${limit} OFFSET ${offset}
+      `,
+    ]);
+    return { totalCount: countRows[0]?.count ?? 0, data };
+  }
+
+  public async updateProjectSettings(
+    tenantSubject: string,
+    actorSubject: string,
+    requestId: string,
+    projectId: string,
+    input: UpdateProjectSettingsInput,
+  ): Promise<ProjectRecord> {
+    return this.sql.begin(async (transaction) => {
+      const rows = await transaction<ProjectRecord[]>`
+        UPDATE projects
+        SET quality_policy = CASE
+              WHEN ${input.quality_policy === undefined}
+                THEN quality_policy
+              ELSE ${transaction.json(input.quality_policy ?? {})}
+            END,
+            original_retention_seconds = CASE
+              WHEN ${input.original_retention_seconds === undefined}
+                THEN original_retention_seconds
+              ELSE ${input.original_retention_seconds ?? null}
+            END
+        WHERE tenant_subject = ${tenantSubject}
+          AND id = ${projectId}
+          AND deleted_at IS NULL
+        RETURNING id, tenant_subject, name, quality_policy,
+                  original_retention_seconds, created_at
+      `;
+      if (!rows[0]) {
+        throw new ApiProblem(
+          404,
+          "Project not found",
+          "urn:smcp:problem:not-found",
+        );
+      }
+      await transaction`
+        INSERT INTO audit_events (
+          tenant_subject, project_id, actor_subject, action, resource_type,
+          resource_id, request_id, outcome
+        ) VALUES (
+          ${tenantSubject}, ${projectId}, ${actorSubject},
+          'project.settings_updated', 'project', ${projectId},
+          ${requestId}, 'success'
+        )
+      `;
+      return rows[0];
+    });
+  }
+
   public async createSourceObject(
     tenantSubject: string,
     actorSubject: string,
-    apiKeyId: string,
+    apiKeyId: string | null,
     requestId: string,
     idempotencyKey: string,
     input: PresignUploadInput,
@@ -1047,7 +1151,7 @@ export class Database {
   public async createCompressionJob(
     tenantSubject: string,
     actorSubject: string,
-    apiKeyId: string,
+    apiKeyId: string | null,
     requestId: string,
     idempotencyKey: string,
     input: CreateCompressionInput,
@@ -1203,6 +1307,32 @@ export class Database {
     return rows[0];
   }
 
+  public async listCompressionJobs(
+    tenantSubject: string,
+    projectId: string,
+    limit: number,
+    offset: number,
+  ): Promise<{ totalCount: number; data: CompressionJobRecord[] }> {
+    await this.assertProject(tenantSubject, projectId);
+    const [countRows, data] = await Promise.all([
+      this.sql<{ count: number }[]>`
+        SELECT count(*)::integer AS count
+        FROM compression_jobs
+        WHERE tenant_subject = ${tenantSubject} AND project_id = ${projectId}
+      `,
+      this.sql<CompressionJobRecord[]>`
+        SELECT id, tenant_subject, project_id, input_type, profile, target_bytes,
+               status, source_object_id, selected_candidate_id, requested_at,
+               completed_at, error_code
+        FROM compression_jobs
+        WHERE tenant_subject = ${tenantSubject} AND project_id = ${projectId}
+        ORDER BY requested_at DESC, id DESC
+        LIMIT ${limit} OFFSET ${offset}
+      `,
+    ]);
+    return { totalCount: countRows[0]?.count ?? 0, data };
+  }
+
   public async listCandidates(
     tenantSubject: string,
     jobId: string,
@@ -1223,7 +1353,8 @@ export class Database {
   ): Promise<ArtifactRecord> {
     const rows = await this.sql<ArtifactRecord[]>`
       SELECT a.id, a.tenant_subject, j.project_id, a.job_id, a.candidate_id,
-             a.kind, a.object_key, a.bytes, encode(a.sha256, 'hex') AS sha256_hex
+             a.kind, a.object_key, a.bytes, encode(a.sha256, 'hex') AS sha256_hex,
+             a.created_at
       FROM artifacts a
       JOIN compression_jobs j
         ON j.id = a.job_id AND j.tenant_subject = a.tenant_subject
@@ -1238,10 +1369,42 @@ export class Database {
     return rows[0];
   }
 
+  public async listArtifacts(
+    tenantSubject: string,
+    projectId: string,
+    limit: number,
+    offset: number,
+  ): Promise<{ totalCount: number; data: ArtifactRecord[] }> {
+    await this.assertProject(tenantSubject, projectId);
+    const [countRows, data] = await Promise.all([
+      this.sql<{ count: number }[]>`
+        SELECT count(*)::integer AS count
+        FROM artifacts a
+        JOIN compression_jobs j
+          ON j.id = a.job_id AND j.tenant_subject = a.tenant_subject
+        WHERE a.tenant_subject = ${tenantSubject}
+          AND j.project_id = ${projectId}
+      `,
+      this.sql<ArtifactRecord[]>`
+        SELECT a.id, a.tenant_subject, j.project_id, a.job_id, a.candidate_id,
+               a.kind, a.object_key, a.bytes,
+               encode(a.sha256, 'hex') AS sha256_hex, a.created_at
+        FROM artifacts a
+        JOIN compression_jobs j
+          ON j.id = a.job_id AND j.tenant_subject = a.tenant_subject
+        WHERE a.tenant_subject = ${tenantSubject}
+          AND j.project_id = ${projectId}
+        ORDER BY a.created_at DESC, a.id DESC
+        LIMIT ${limit} OFFSET ${offset}
+      `,
+    ]);
+    return { totalCount: countRows[0]?.count ?? 0, data };
+  }
+
   public async createDecompressionJob(
     tenantSubject: string,
     actorSubject: string,
-    apiKeyId: string,
+    apiKeyId: string | null,
     requestId: string,
     idempotencyKey: string,
     input: CreateDecompressionInput,
@@ -1400,7 +1563,7 @@ export class Database {
   public async createWebhookEndpoint(
     tenantSubject: string,
     actorSubject: string,
-    apiKeyId: string,
+    apiKeyId: string | null,
     requestId: string,
     idempotencyKey: string,
     input: CreateWebhookEndpointInput,
@@ -1473,7 +1636,7 @@ export class Database {
   public async disableWebhookEndpoint(
     tenantSubject: string,
     actorSubject: string,
-    apiKeyId: string,
+    apiKeyId: string | null,
     requestId: string,
     id: string,
   ): Promise<void> {
@@ -1593,7 +1756,7 @@ export class Database {
   public async cancelCompressionJob(
     tenantSubject: string,
     actorSubject: string,
-    apiKeyId: string,
+    apiKeyId: string | null,
     requestId: string,
     id: string,
   ): Promise<CompressionJobRecord> {

@@ -48,6 +48,45 @@ export const createProjectSchema = z.strictObject({
   name: z.string().trim().min(1).max(120),
 });
 
+export const qualityPolicySchema = z.strictObject({
+  image: z
+    .strictObject({
+      ms_ssim_min: z.number().min(0.9).max(1),
+    })
+    .optional(),
+  audio: z
+    .strictObject({
+      duration_delta_max_seconds: z.number().min(0).max(0.02),
+      clipping_ratio_max: z.number().min(0).max(0.001),
+    })
+    .optional(),
+  video: z
+    .strictObject({
+      vmaf_min: z.number().min(70).max(100),
+      ssim_fallback_min: z.number().min(0.85).max(1),
+      duration_delta_max_seconds: z.number().min(0).max(0.05),
+    })
+    .optional(),
+});
+
+export const updateProjectSettingsSchema = z
+  .strictObject({
+    quality_policy: qualityPolicySchema.optional(),
+    original_retention_seconds: z
+      .number()
+      .int()
+      .min(0)
+      .max(31_536_000)
+      .nullable()
+      .optional(),
+  })
+  .refine(
+    (input) =>
+      input.quality_policy !== undefined ||
+      input.original_retention_seconds !== undefined,
+    { message: "At least one project setting is required" },
+  );
+
 export const createApiKeySchema = z.strictObject({
   name: z.string().trim().min(1).max(100),
   scopes: z.array(apiScopeSchema).min(1).max(scopeValues.length),
@@ -75,6 +114,13 @@ export const createWebhookEndpointSchema = z.strictObject({
     .transform((values) => [...new Set(values)].sort()),
 });
 export const projectIdQuerySchema = z.strictObject({ project_id: uuidSchema });
+export const paginationQuerySchema = z.strictObject({
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  offset: z.coerce.number().int().min(0).max(10_000).default(0),
+});
+export const projectCollectionQuerySchema = paginationQuerySchema.extend({
+  project_id: uuidSchema,
+});
 
 export const allowedMimeTypes = [
   "text/plain",
@@ -174,6 +220,9 @@ export const problemSchema = z.object({
 });
 
 export type CreateProjectInput = z.infer<typeof createProjectSchema>;
+export type UpdateProjectSettingsInput = z.infer<
+  typeof updateProjectSettingsSchema
+>;
 export type CreateApiKeyInput = z.infer<typeof createApiKeySchema>;
 export type PresignUploadInput = z.infer<typeof presignUploadSchema>;
 export type CreateCompressionInput = z.infer<typeof createCompressionSchema>;

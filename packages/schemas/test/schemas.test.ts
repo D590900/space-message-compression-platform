@@ -7,6 +7,7 @@ import {
   createCompressionSchema,
   createWebhookEndpointSchema,
   idempotencyKeySchema,
+  updateProjectSettingsSchema,
 } from "../src/index.js";
 
 describe("shared API schemas", () => {
@@ -82,5 +83,25 @@ describe("shared API schemas", () => {
         url: "http://events.example.com/smcp",
       }).success,
     ).toBe(false);
+  });
+
+  it("allows stricter project quality gates but rejects weakened floors", () => {
+    expect(
+      updateProjectSettingsSchema.safeParse({
+        quality_policy: {
+          image: { ms_ssim_min: 0.96 },
+          audio: {
+            duration_delta_max_seconds: 0.01,
+            clipping_ratio_max: 0.0005,
+          },
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      updateProjectSettingsSchema.safeParse({
+        quality_policy: { image: { ms_ssim_min: 0.5 } },
+      }).success,
+    ).toBe(false);
+    expect(updateProjectSettingsSchema.safeParse({}).success).toBe(false);
   });
 });

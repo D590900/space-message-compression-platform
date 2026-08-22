@@ -36,6 +36,17 @@ paths:
         "200": { description: Dependencies are ready }
         "503": { $ref: "#/components/responses/Problem" }
   /v1/projects:
+    get:
+      summary: List projects for the active organization
+      tags: [Projects]
+      operationId: listProjects
+      x-dashboard-session-only: true
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200": { description: Bounded project page }
+        "401": { $ref: "#/components/responses/Problem" }
     post:
       summary: Create a project for the active organization
       tags: [Projects]
@@ -89,6 +100,22 @@ paths:
       responses:
         "200":
           { description: "Monthly counters, active jobs and configured limits" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /v1/projects/{id}/settings:
+    patch:
+      summary: Replace project quality thresholds or source retention
+      tags: [Projects]
+      operationId: updateProjectSettings
+      x-dashboard-session-only: true
+      parameters: [{ $ref: "#/components/parameters/ResourceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProjectSettingsUpdate" }
+      responses:
+        "200": { description: Updated project settings }
+        "400": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
   /v1/api-keys/{id}/rotate:
     post:
@@ -175,6 +202,19 @@ paths:
         "204": { description: Endpoint disabled }
         "404": { $ref: "#/components/responses/Problem" }
   /v1/compressions:
+    get:
+      summary: List compression jobs for a project
+      tags: [Compressions]
+      operationId: listCompressions
+      x-required-scope: jobs:read
+      x-session-auth-supported: true
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200": { description: Bounded compression-job page }
+        "404": { $ref: "#/components/responses/Problem" }
     post:
       summary: Create a compression job
       tags: [Compressions]
@@ -221,6 +261,20 @@ paths:
       parameters: [{ $ref: "#/components/parameters/ResourceId" }]
       responses:
         "200": { description: Pareto candidates and quality reports }
+  /v1/artifacts:
+    get:
+      summary: List compressed artifacts for a project
+      tags: [Compressions]
+      operationId: listArtifacts
+      x-required-scope: artifacts:read
+      x-session-auth-supported: true
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200": { description: Bounded artifact page }
+        "404": { $ref: "#/components/responses/Problem" }
   /v1/artifacts/{id}/download:
     get:
       summary: Create an artifact download URL
@@ -279,6 +333,19 @@ paths:
       responses:
         "200": { description: Plan }
   /v1/capsules:
+    get:
+      summary: List capsules for a project
+      tags: [Capsules]
+      operationId: listCapsules
+      x-required-scope: capsules:read
+      x-session-auth-supported: true
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200": { description: Bounded capsule page }
+        "404": { $ref: "#/components/responses/Problem" }
     post:
       summary: Queue a deterministic capsule build and verification
       tags: [Capsules]
@@ -378,6 +445,21 @@ components:
       type: http
       scheme: bearer
   parameters:
+    ProjectId:
+      name: project_id
+      in: query
+      required: true
+      schema: { type: string, format: uuid }
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+    Offset:
+      name: offset
+      in: query
+      required: false
+      schema: { type: integer, minimum: 0, maximum: 10000, default: 0 }
     ResourceId:
       name: id
       in: path
@@ -405,6 +487,7 @@ components:
           schema: { $ref: "#/components/schemas/Problem" }
   schemas:
     ProjectCreate: {}
+    ProjectSettingsUpdate: {}
     Problem:
       type: object
       required: [type, title, status, request_id]

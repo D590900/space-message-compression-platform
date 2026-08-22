@@ -11,10 +11,13 @@ import {
   createProjectSchema,
   createWebhookEndpointSchema,
   idempotencyKeySchema,
+  paginationQuerySchema,
   presignUploadSchema,
+  projectCollectionQuerySchema,
   projectIdQuerySchema,
   resourceIdParamsSchema,
   rotateApiKeySchema,
+  updateProjectSettingsSchema,
   verifyCapsuleSchema,
   type ApiScope,
 } from "@smcp/schemas";
@@ -259,20 +262,39 @@ export async function buildApp(
     return session;
   };
 
+  const authorizedPrincipal = async (
+    request: FastifyRequest,
+    scope: ApiScope,
+  ) => {
+    const session = await dependencies.clerk.authenticateSession(
+      toWebRequest(request, config.API_ORIGIN),
+    );
+    if (session) {
+      await dependencies.rateLimiter.consume(
+        session.tenantSubject,
+        `session:${session.actorSubject}`,
+        request.method,
+        request.routeOptions.url ?? request.url,
+      );
+      return { ...session, keyId: null };
+    }
+    return apiPrincipal(request, scope);
+  };
+
   app.get("/v1/codecs", async (request) => {
-    await apiPrincipal(request, "codecs:read");
+    await authorizedPrincipal(request, "codecs:read");
     const data = await dependencies.database.listCodecCapabilities();
     return { total_count: data.length, data };
   });
 
   app.get("/v1/models", async (request) => {
-    await apiPrincipal(request, "codecs:read");
+    await authorizedPrincipal(request, "codecs:read");
     const data = await dependencies.database.listModelManifests();
     return { total_count: data.length, data };
   });
 
   app.post("/v1/capsule-plans", async (request, reply) => {
-    const principal = await apiPrincipal(request, "capsules:plan");
+    const principal = await authorizedPrincipal(request, "capsules:plan");
     const input = createCapsulePlanSchema.parse(request.body);
     const candidates = await dependencies.database.getCapsuleCandidates(
       principal.tenantSubject,
@@ -350,13 +372,13 @@ export async function buildApp(
   });
 
   app.get("/v1/capsule-plans/:id", async (request) => {
-    const principal = await apiPrincipal(request, "capsules:read");
+    const principal = await authorizedPrincipal(request, "capsules:read");
     const { id } = resourceIdParamsSchema.parse(request.params);
     return dependencies.database.getCapsulePlan(principal.tenantSubject, id);
   });
 
   app.post("/v1/capsules", async (request, reply) => {
-    const principal = await apiPrincipal(request, "capsules:create");
+    const principal = await authorizedPrincipal(request, "capsules:create");
     const input = createCapsuleSchema.parse(request.body);
     const result = await dependencies.database.createCapsuleJob(
       principal.tenantSubject,
@@ -378,7 +400,7 @@ export async function buildApp(
   });
 
   app.post("/v1/capsules/verify", async (request) => {
-    const principal = await apiPrincipal(request, "capsules:read");
+    const principal = await authorizedPrincipal(request, "capsules:read");
     const input = verifyCapsuleSchema.parse(request.body);
     const capsule = await dependencies.database.getCapsule(
       principal.tenantSubject,
@@ -418,13 +440,13 @@ export async function buildApp(
   });
 
   app.get("/v1/capsules/:id", async (request) => {
-    const principal = await apiPrincipal(request, "capsules:read");
+    const principal = await authorizedPrincipal(request, "capsules:read");
     const { id } = resourceIdParamsSchema.parse(request.params);
     return dependencies.database.getCapsule(principal.tenantSubject, id);
   });
 
   app.get("/v1/capsules/:id/manifest", async (request) => {
-    const principal = await apiPrincipal(request, "capsules:read");
+    const principal = await authorizedPrincipal(request, "capsules:read");
     const { id } = resourceIdParamsSchema.parse(request.params);
     return dependencies.database.getCapsuleManifest(
       principal.tenantSubject,
@@ -433,7 +455,7 @@ export async function buildApp(
   });
 
   app.get("/v1/capsules/:id/download", async (request) => {
-    const principal = await apiPrincipal(request, "capsules:read");
+    const principal = await authorizedPrincipal(request, "capsules:read");
     const { id } = resourceIdParamsSchema.parse(request.params);
     const capsule = await dependencies.database.getCapsule(
       principal.tenantSubject,
@@ -457,6 +479,33 @@ export async function buildApp(
     };
   });
 
+  app.get("/v1/capsules", async (request) => {
+    const principal = await authorizedPrincipal(request, "capsules:read");
+    const {
+      project_id: projectId,
+      limit,
+      offset,
+    } = projectCollectionQuerySchema.parse(request.query);
+    const page = await dependencies.database.listCapsules(
+      principal.tenantSubject,
+      projectId,
+      limit,
+      offset,
+    );
+    return { total_count: page.totalCount, limit, offset, data: page.data };
+  });
+
+  app.get("/v1/projects", async (request) => {
+    const session = await sessionPrincipal(request);
+    const { limit, offset } = paginationQuerySchema.parse(request.query);
+    const page = await dependencies.database.listProjects(
+      session.tenantSubject,
+      limit,
+      offset,
+    );
+    return { total_count: page.totalCount, limit, offset, data: page.data };
+  });
+
   app.post("/v1/projects", async (request, reply) => {
     const requestIdempotencyKey = idempotencyKey(request);
     const session = await sessionPrincipal(request);
@@ -472,9 +521,22 @@ export async function buildApp(
   });
 
   app.get("/v1/projects/:id/usage", async (request) => {
-    const principal = await apiPrincipal(request, "jobs:read");
+    const principal = await authorizedPrincipal(request, "jobs:read");
     const { id } = resourceIdParamsSchema.parse(request.params);
     return dependencies.database.getProjectUsage(principal.tenantSubject, id);
+  });
+
+  app.patch("/v1/projects/:id/settings", async (request) => {
+    const session = await sessionPrincipal(request);
+    const { id } = resourceIdParamsSchema.parse(request.params);
+    const input = updateProjectSettingsSchema.parse(request.body);
+    return dependencies.database.updateProjectSettings(
+      session.tenantSubject,
+      session.actorSubject,
+      request.id,
+      id,
+      input,
+    );
   });
 
   app.get("/v1/api-keys", async (request) => {
@@ -722,7 +784,7 @@ export async function buildApp(
   });
 
   app.post("/v1/webhooks", async (request, reply) => {
-    const principal = await apiPrincipal(request, "webhooks:manage");
+    const principal = await authorizedPrincipal(request, "webhooks:manage");
     const input = createWebhookEndpointSchema.parse(request.body);
     await resolvePublicWebhookUrl(input.url);
     const secret = `whsec_${randomBytes(32).toString("base64url")}`;
@@ -743,7 +805,7 @@ export async function buildApp(
   });
 
   app.get("/v1/webhooks", async (request) => {
-    const principal = await apiPrincipal(request, "webhooks:manage");
+    const principal = await authorizedPrincipal(request, "webhooks:manage");
     const { project_id: projectId } = projectIdQuerySchema.parse(request.query);
     const data = await dependencies.database.listWebhookEndpoints(
       principal.tenantSubject,
@@ -753,7 +815,7 @@ export async function buildApp(
   });
 
   app.delete("/v1/webhooks/:id", async (request, reply) => {
-    const principal = await apiPrincipal(request, "webhooks:manage");
+    const principal = await authorizedPrincipal(request, "webhooks:manage");
     const { id } = resourceIdParamsSchema.parse(request.params);
     await dependencies.database.disableWebhookEndpoint(
       principal.tenantSubject,
@@ -767,7 +829,7 @@ export async function buildApp(
 
   app.post("/v1/uploads/presign", async (request, reply) => {
     const requestIdempotencyKey = idempotencyKey(request);
-    const principal = await apiPrincipal(request, "jobs:create");
+    const principal = await authorizedPrincipal(request, "jobs:create");
     const input = presignUploadSchema.parse(request.body);
     if (input.bytes > config.MAX_UPLOAD_BYTES) {
       throw new ApiProblem(
@@ -810,7 +872,7 @@ export async function buildApp(
   });
 
   app.post("/v1/compressions", async (request, reply) => {
-    const principal = await apiPrincipal(request, "jobs:create");
+    const principal = await authorizedPrincipal(request, "jobs:create");
     const input = createCompressionSchema.parse(request.body);
     if (input.profile === "semantic") {
       throw new ApiProblem(
@@ -838,14 +900,30 @@ export async function buildApp(
     return reply.status(202).send(result.job);
   });
 
+  app.get("/v1/compressions", async (request) => {
+    const principal = await authorizedPrincipal(request, "jobs:read");
+    const {
+      project_id: projectId,
+      limit,
+      offset,
+    } = projectCollectionQuerySchema.parse(request.query);
+    const page = await dependencies.database.listCompressionJobs(
+      principal.tenantSubject,
+      projectId,
+      limit,
+      offset,
+    );
+    return { total_count: page.totalCount, limit, offset, data: page.data };
+  });
+
   app.get("/v1/compressions/:id", async (request) => {
-    const principal = await apiPrincipal(request, "jobs:read");
+    const principal = await authorizedPrincipal(request, "jobs:read");
     const { id } = resourceIdParamsSchema.parse(request.params);
     return dependencies.database.getCompressionJob(principal.tenantSubject, id);
   });
 
   app.get("/v1/compressions/:id/candidates", async (request) => {
-    const principal = await apiPrincipal(request, "jobs:read");
+    const principal = await authorizedPrincipal(request, "jobs:read");
     const { id } = resourceIdParamsSchema.parse(request.params);
     return {
       data: await dependencies.database.listCandidates(
@@ -856,7 +934,7 @@ export async function buildApp(
   });
 
   app.get("/v1/artifacts/:id/download", async (request) => {
-    const principal = await apiPrincipal(request, "artifacts:read");
+    const principal = await authorizedPrincipal(request, "artifacts:read");
     const { id } = resourceIdParamsSchema.parse(request.params);
     const artifact = await dependencies.database.getArtifact(
       principal.tenantSubject,
@@ -873,8 +951,27 @@ export async function buildApp(
     };
   });
 
+  app.get("/v1/artifacts", async (request) => {
+    const principal = await authorizedPrincipal(request, "artifacts:read");
+    const {
+      project_id: projectId,
+      limit,
+      offset,
+    } = projectCollectionQuerySchema.parse(request.query);
+    const page = await dependencies.database.listArtifacts(
+      principal.tenantSubject,
+      projectId,
+      limit,
+      offset,
+    );
+    return { total_count: page.totalCount, limit, offset, data: page.data };
+  });
+
   app.post("/v1/decompressions", async (request, reply) => {
-    const principal = await apiPrincipal(request, "decompressions:create");
+    const principal = await authorizedPrincipal(
+      request,
+      "decompressions:create",
+    );
     const input = createDecompressionSchema.parse(request.body);
     const result = await dependencies.database.createDecompressionJob(
       principal.tenantSubject,
@@ -896,7 +993,7 @@ export async function buildApp(
   });
 
   app.get("/v1/decompressions/:id", async (request) => {
-    const principal = await apiPrincipal(request, "artifacts:read");
+    const principal = await authorizedPrincipal(request, "artifacts:read");
     const { id } = resourceIdParamsSchema.parse(request.params);
     const job = await dependencies.database.getDecompressionJob(
       principal.tenantSubject,
@@ -917,7 +1014,7 @@ export async function buildApp(
 
   app.post("/v1/compressions/:id/cancel", async (request, reply) => {
     idempotencyKey(request);
-    const principal = await apiPrincipal(request, "jobs:cancel");
+    const principal = await authorizedPrincipal(request, "jobs:cancel");
     const { id } = resourceIdParamsSchema.parse(request.params);
     const job = await dependencies.database.cancelCompressionJob(
       principal.tenantSubject,
