@@ -28,6 +28,12 @@ const configSchema = z.object({
   SIGNED_URL_TTL_SECONDS: z.coerce.number().int().min(30).max(900).default(300),
   MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(1_073_741_824),
   CAPSULE_CLI_PATH: z.string().min(1).default("smcp-capsule"),
+  KEY_ROTATION_POLL_MS: z.coerce
+    .number()
+    .int()
+    .min(100)
+    .max(60_000)
+    .default(5_000),
 });
 
 export type ApiConfig = z.infer<typeof configSchema>;
