@@ -9,7 +9,7 @@ Dashboard sessions and programmatic credentials need organization ownership, exp
 
 ## Decision
 
-Clerk is authoritative for users, organizations, memberships, sessions and API keys. Dashboard-only key-management routes require a verified session plus organization permission. Public API routes accept bearer credentials and perform server-side Clerk verification on every request.
+Clerk is authoritative for users, organizations, memberships, sessions and API keys. Dashboard-only key-management and project-policy routes require a verified session with Clerk's default `org:admin` role; ordinary members retain read and job-operation access. Public API routes accept bearer credentials and perform server-side Clerk verification on every request.
 
 Accepted API keys must contain the custom claim `smcp_issued: true`, a tenant subject and the endpoint's required scope. The application stores only Clerk key identifiers and non-secret audit metadata. Creation returns the secret exactly once. Rotation creates a distinct key, allows a bounded overlap and then revokes the predecessor through Clerk.
 
@@ -18,4 +18,3 @@ Tenant identity is derived from the verified credential, never accepted from req
 ## Consequences
 
 Clerk availability is required to verify a fresh key. Short-lived positive verification caching may be added with revocation-aware TTL. E2E requires a real Clerk test instance; unit tests use injected verifier contracts rather than fake production endpoints.
-

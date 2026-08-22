@@ -27,6 +27,7 @@ export type SessionPrincipal = {
   kind: "session";
   tenantSubject: string;
   actorSubject: string;
+  organizationRole: string;
 };
 
 type VerifiedApiKey = {
@@ -87,11 +88,12 @@ export class ProductionClerkGateway implements ClerkGateway {
     });
     if (!state.isAuthenticated) return null;
     const auth = state.toAuth();
-    if (!auth.userId || !auth.orgId) return null;
+    if (!auth.userId || !auth.orgId || !auth.orgRole) return null;
     return {
       kind: "session",
       actorSubject: auth.userId,
       tenantSubject: auth.orgId,
+      organizationRole: auth.orgRole,
     };
   }
 
@@ -213,6 +215,19 @@ export async function requireSession(
       401,
       "Signed-in organization session required",
       "urn:smcp:problem:session-required",
+    );
+  }
+  return session;
+}
+
+export function requireOrganizationAdmin(
+  session: SessionPrincipal,
+): SessionPrincipal {
+  if (session.organizationRole !== "org:admin") {
+    throw new ApiProblem(
+      403,
+      "Organization administrator permission required",
+      "urn:smcp:problem:organization-admin-required",
     );
   }
   return session;

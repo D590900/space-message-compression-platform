@@ -28,6 +28,7 @@ import {
   type ClerkGateway,
   ProductionClerkGateway,
   requireApiKey,
+  requireOrganizationAdmin,
   requireSession,
 } from "./auth.js";
 import type { ApiConfig } from "./config.js";
@@ -280,6 +281,9 @@ export async function buildApp(
       toWebRequest(request, config.API_ORIGIN),
     );
     if (session) {
+      if (scope === "webhooks:manage" || scope.startsWith("admin:")) {
+        requireOrganizationAdmin(session);
+      }
       await dependencies.rateLimiter.consume(
         session.tenantSubject,
         `session:${session.actorSubject}`,
@@ -532,7 +536,7 @@ export async function buildApp(
   });
 
   app.patch("/v1/projects/:id/settings", async (request) => {
-    const session = await sessionPrincipal(request);
+    const session = requireOrganizationAdmin(await sessionPrincipal(request));
     const { id } = resourceIdParamsSchema.parse(request.params);
     const input = updateProjectSettingsSchema.parse(request.body);
     return dependencies.database.updateProjectSettings(
@@ -545,7 +549,7 @@ export async function buildApp(
   });
 
   app.get("/v1/api-keys", async (request) => {
-    const session = await sessionPrincipal(request);
+    const session = requireOrganizationAdmin(await sessionPrincipal(request));
     const page = await dependencies.clerk.listApiKeys(session.tenantSubject);
     return {
       total_count: page.totalCount,
@@ -555,7 +559,7 @@ export async function buildApp(
 
   app.post("/v1/api-keys", async (request, reply) => {
     const requestIdempotencyKey = idempotencyKey(request);
-    const session = await sessionPrincipal(request);
+    const session = requireOrganizationAdmin(await sessionPrincipal(request));
     const input = createApiKeySchema.parse(request.body);
     const secondsUntilExpiration = Math.floor(
       (new Date(input.expires_at).getTime() - Date.now()) / 1000,
@@ -627,7 +631,7 @@ export async function buildApp(
 
   app.post("/v1/api-keys/:id/rotate", async (request, reply) => {
     const requestIdempotencyKey = idempotencyKey(request);
-    const session = await sessionPrincipal(request);
+    const session = requireOrganizationAdmin(await sessionPrincipal(request));
     const { id } = apiKeyIdParamsSchema.parse(request.params);
     const { overlap_seconds: overlapSeconds } = rotateApiKeySchema.parse(
       request.body ?? {},
@@ -765,7 +769,7 @@ export async function buildApp(
   });
 
   app.delete("/v1/api-keys/:id", async (request, reply) => {
-    const session = await sessionPrincipal(request);
+    const session = requireOrganizationAdmin(await sessionPrincipal(request));
     const { id } = apiKeyIdParamsSchema.parse(request.params);
     const key = await dependencies.clerk.getApiKey(id);
     if (key.subject !== session.tenantSubject) {
