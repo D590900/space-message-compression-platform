@@ -60,6 +60,8 @@ class EncodedCandidate:
     codec_version: str
     config: dict[str, Any]
     payload: bytes
+    encode_duration_ms: int = 0
+    decode_duration_ms: int = 0
 
 
 @dataclass(frozen=True, slots=True)

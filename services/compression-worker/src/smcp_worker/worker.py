@@ -364,8 +364,8 @@ class CompressionWorker:
             if not candidates:
                 self._terminal_failure(connection, job, "NO_QUALITY_GATED_CANDIDATE")
                 return
-            encode_duration_ms = max(0, (time.perf_counter_ns() - started) // 1_000_000)
-            ENCODE_DURATION.labels(content_type=input_type).observe(encode_duration_ms / 1_000)
+            generation_duration_ms = max(0, (time.perf_counter_ns() - started) // 1_000_000)
+            ENCODE_DURATION.labels(content_type=input_type).observe(generation_duration_ms / 1_000)
             self._transition(connection, job_id, tenant_subject, "ENCODING", "MEASURING")
 
             persisted: list[tuple[str, int, str]] = []
@@ -426,7 +426,7 @@ class CompressionWorker:
                       quality_metrics, quality_gate_passed, encode_duration_ms,
                       decode_duration_ms, hardware, determinism_status, object_key, sha256
                     ) VALUES (
-                      %s, %s, %s, %s, %s, %s, %s, %s, 0, %s, true, %s, 0,
+                      %s, %s, %s, %s, %s, %s, %s, %s, 0, %s, true, %s, %s,
                       %s, %s, %s, %s
                     )
                     ON CONFLICT (id) DO NOTHING
@@ -441,7 +441,8 @@ class CompressionWorker:
                         job["profile"],
                         len(candidate.payload),
                         json.dumps(asdict(report), sort_keys=True),
-                        encode_duration_ms,
+                        candidate.encode_duration_ms,
+                        candidate.decode_duration_ms,
                         json.dumps({"runtime": "python", "device": "cpu"}),
                         "BIT_EXACT" if input_type == "TEXT" else "REPRODUCIBLE_CONFIG",
                         object_key,

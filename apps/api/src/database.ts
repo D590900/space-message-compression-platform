@@ -66,11 +66,21 @@ export type CandidateRecord = {
   id: string;
   codec_id: string;
   codec_version: string;
+  model_id: string | null;
+  model_version: string | null;
+  model_hash_hex: string | null;
+  config_hash_hex: string;
+  profile: Profile;
   payload_bytes: number;
   container_overhead_bytes: number;
   quality_metrics: Record<string, unknown>;
   quality_gate_passed: boolean;
+  encode_duration_ms: number;
+  decode_duration_ms: number;
+  hardware: Record<string, unknown>;
   determinism_status: string;
+  sha256_hex: string;
+  created_at: Date;
 };
 
 export type ArtifactRecord = {
@@ -1339,8 +1349,14 @@ export class Database {
   ): Promise<CandidateRecord[]> {
     await this.getCompressionJob(tenantSubject, jobId);
     return this.sql<CandidateRecord[]>`
-      SELECT id, codec_id, codec_version, payload_bytes, container_overhead_bytes,
-             quality_metrics, quality_gate_passed, determinism_status
+      SELECT id, codec_id, codec_version, model_id, model_version,
+             CASE WHEN model_hash IS NULL THEN NULL
+               ELSE encode(model_hash, 'hex') END AS model_hash_hex,
+             encode(config_hash, 'hex') AS config_hash_hex, profile,
+             payload_bytes, container_overhead_bytes, quality_metrics,
+             quality_gate_passed, encode_duration_ms, decode_duration_ms,
+             hardware, determinism_status, encode(sha256, 'hex') AS sha256_hex,
+             created_at
       FROM encoding_candidates
       WHERE tenant_subject = ${tenantSubject} AND job_id = ${jobId}
       ORDER BY payload_bytes ASC, codec_id ASC, id ASC

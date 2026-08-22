@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import time
+from dataclasses import replace
 from importlib.metadata import version
 
 import brotli
@@ -141,8 +143,18 @@ def generate_text_candidates(
     for adapter, levels in adapters_and_levels:
         prepared = adapter.preprocess(source, profile)
         for level in levels:
+            encode_started = time.perf_counter_ns()
             candidate = adapter.encode(prepared, EncodeParams(level=level))
-            report = adapter.measure(prepared, adapter.decode(candidate))
+            encode_duration_ms = max(0, (time.perf_counter_ns() - encode_started) // 1_000_000)
+            decode_started = time.perf_counter_ns()
+            decoded = adapter.decode(candidate)
+            decode_duration_ms = max(0, (time.perf_counter_ns() - decode_started) // 1_000_000)
+            candidate = replace(
+                candidate,
+                encode_duration_ms=encode_duration_ms,
+                decode_duration_ms=decode_duration_ms,
+            )
+            report = adapter.measure(prepared, decoded)
             if not report.quality_gate_passed:
                 raise RuntimeError(f"{candidate.codec_id} failed exact round-trip")
             candidates.append((candidate, report))
