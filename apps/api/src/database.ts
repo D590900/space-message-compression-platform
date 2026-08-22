@@ -724,6 +724,87 @@ export class Database {
     });
   }
 
+  public async completeExternalApiKeyRotation(
+    tenantSubject: string,
+    actorSubject: string,
+    requestId: string,
+    route: string,
+    idempotencyKey: string,
+    operationId: string,
+    oldKeyId: string,
+    newKeyId: string,
+    revokeAt: Date,
+    responseBody: Record<string, unknown>,
+  ): Promise<ApiKeyRotationRecord> {
+    return this.sql.begin(async (transaction) => {
+      const id = randomUUID();
+      const inserted = await transaction<ApiKeyRotationRecord[]>`
+        INSERT INTO api_key_rotations (
+          id, tenant_subject, old_key_id, new_key_id, revoke_at, created_by
+        ) VALUES (
+          ${id}, ${tenantSubject}, ${oldKeyId}, ${newKeyId}, ${revokeAt}, ${actorSubject}
+        )
+        ON CONFLICT (tenant_subject, old_key_id) DO NOTHING
+        RETURNING id, tenant_subject, old_key_id, new_key_id, revoke_at, attempt
+      `;
+      const rotation =
+        inserted[0] ??
+        (
+          await transaction<ApiKeyRotationRecord[]>`
+            SELECT id, tenant_subject, old_key_id, new_key_id, revoke_at, attempt
+            FROM api_key_rotations
+            WHERE tenant_subject = ${tenantSubject} AND old_key_id = ${oldKeyId}
+          `
+        )[0];
+      if (!rotation || rotation.new_key_id !== newKeyId) {
+        throw new ApiProblem(
+          409,
+          "This key has already been rotated",
+          "urn:smcp:problem:rotation-already-created",
+        );
+      }
+      const completed = await transaction<{ resource_id: string }[]>`
+        UPDATE idempotency_records
+        SET response_status = 201,
+            response_body = ${transaction.json(responseBody as postgres.JSONValue)},
+            external_resource_id = ${newKeyId}
+        WHERE tenant_subject = ${tenantSubject} AND route = ${route}
+          AND key = ${idempotencyKey} AND resource_id = ${operationId}
+          AND response_status IS NULL
+        RETURNING resource_id
+      `;
+      if (!completed[0]) {
+        const existing = await transaction<
+          { external_resource_id: string | null }[]
+        >`
+          SELECT external_resource_id FROM idempotency_records
+          WHERE tenant_subject = ${tenantSubject} AND route = ${route}
+            AND key = ${idempotencyKey} AND resource_id = ${operationId}
+        `;
+        if (existing[0]?.external_resource_id !== newKeyId)
+          throw new Error("API-key rotation idempotency claim was lost");
+      }
+      if (inserted[0]) {
+        await transaction`
+          INSERT INTO audit_events (
+            tenant_subject, actor_subject, api_key_id, action, resource_type,
+            resource_id, request_id, outcome, metadata
+          ) VALUES (
+            ${tenantSubject}, ${actorSubject}, ${oldKeyId},
+            'api_key.rotation_scheduled', 'api_key', ${oldKeyId},
+            ${requestId}, 'success',
+            ${transaction.json({
+              new_key_id: newKeyId,
+              operation_id: operationId,
+              revoke_at: revokeAt.toISOString(),
+            })}
+          )
+        `;
+      }
+      return rotation;
+    });
+  }
+
   public async claimExternalMutation(
     tenantSubject: string,
     route: string,

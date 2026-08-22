@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 
 import rateLimit from "@fastify/rate-limit";
 import {
+  apiKeyIdParamsSchema,
   createApiKeySchema,
   createCapsulePlanSchema,
   createCapsuleSchema,
@@ -548,68 +549,115 @@ export async function buildApp(
   });
 
   app.post("/v1/api-keys/:id/rotate", async (request, reply) => {
-    idempotencyKey(request);
+    const requestIdempotencyKey = idempotencyKey(request);
     const session = await sessionPrincipal(request);
-    const { id } = resourceIdParamsSchema.parse(request.params);
+    const { id } = apiKeyIdParamsSchema.parse(request.params);
     const { overlap_seconds: overlapSeconds } = rotateApiKeySchema.parse(
       request.body ?? {},
     );
     const oldKey = await dependencies.clerk.getApiKey(id);
-    if (oldKey.subject !== session.tenantSubject || oldKey.revoked) {
+    if (oldKey.subject !== session.tenantSubject) {
       throw new ApiProblem(
         404,
         "API key not found",
         "urn:smcp:problem:not-found",
       );
     }
-    if (
-      await dependencies.database.apiKeyRotationExists(
-        session.tenantSubject,
-        oldKey.id,
-      )
-    ) {
+    const route = "/v1/api-keys/:id/rotate";
+    const claim = await dependencies.database.claimExternalMutation(
+      session.tenantSubject,
+      route,
+      requestIdempotencyKey,
+      { id: oldKey.id, overlap_seconds: overlapSeconds },
+    );
+    if (claim.state === "completed") {
       throw new ApiProblem(
         409,
-        "This key has already been rotated; one-time replacement secrets cannot be replayed",
+        "Rotation already completed; the one-time replacement secret cannot be replayed",
         "urn:smcp:problem:rotation-already-created",
+      );
+    }
+    if (claim.state === "pending") {
+      throw new ApiProblem(
+        409,
+        "Rotation is still being reconciled; retry later with the same Idempotency-Key",
+        "urn:smcp:problem:idempotency-pending",
+      );
+    }
+    if (oldKey.revoked) {
+      throw new ApiProblem(
+        404,
+        "API key not found",
+        "urn:smcp:problem:not-found",
       );
     }
     const remainingSeconds = oldKey.expiration
       ? Math.max(60, Math.floor((oldKey.expiration - Date.now()) / 1000))
       : 31_536_000;
-    const replacement = await dependencies.clerk.createApiKey({
-      name: `${oldKey.name} (rotated)`,
-      subject: session.tenantSubject,
-      createdBy: session.actorSubject,
-      scopes: oldKey.scopes,
-      claims: { smcp_issued: true, rotated_from: oldKey.id },
-      secondsUntilExpiration: remainingSeconds,
-    });
+    const existing = (
+      await dependencies.clerk.listApiKeys(session.tenantSubject)
+    ).data.find(
+      (key) =>
+        key.claims?.smcp_rotation_operation_id === claim.operationId &&
+        key.claims?.rotated_from === oldKey.id,
+    );
+    if (
+      !existing &&
+      (await dependencies.database.apiKeyRotationExists(
+        session.tenantSubject,
+        oldKey.id,
+      ))
+    ) {
+      throw new ApiProblem(
+        409,
+        "This key has already been rotated",
+        "urn:smcp:problem:rotation-already-created",
+      );
+    }
+    const replacement =
+      existing ??
+      (await dependencies.clerk.createApiKey({
+        name: `${oldKey.name} (rotated)`,
+        subject: session.tenantSubject,
+        createdBy: session.actorSubject,
+        scopes: oldKey.scopes,
+        claims: {
+          smcp_issued: true,
+          rotated_from: oldKey.id,
+          smcp_rotation_operation_id: claim.operationId,
+        },
+        secondsUntilExpiration: remainingSeconds,
+      }));
+    const secret =
+      replacement.secret ??
+      (await dependencies.clerk.getApiKeySecret(replacement.id));
+    const { secret: _secret, ...replacementMetadata } = replacement;
+    const revokeAt = new Date(Date.now() + overlapSeconds * 1_000);
     let rotation;
     try {
-      rotation = await dependencies.database.scheduleApiKeyRotation(
+      rotation = await dependencies.database.completeExternalApiKeyRotation(
         session.tenantSubject,
         session.actorSubject,
         request.id,
+        route,
+        requestIdempotencyKey,
+        claim.operationId,
         oldKey.id,
         replacement.id,
-        new Date(Date.now() + overlapSeconds * 1_000),
+        revokeAt,
+        {
+          ...replacementMetadata,
+          rotation: { old_key_id: oldKey.id, revoke_at: revokeAt },
+        },
       );
     } catch (error) {
-      await dependencies.clerk.revokeApiKey(
-        replacement.id,
-        "Rotation setup failed",
-      );
       if (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        error.code === "23505"
+        error instanceof ApiProblem &&
+        error.type === "urn:smcp:problem:rotation-already-created"
       ) {
-        throw new ApiProblem(
-          409,
-          "This key has already been rotated; one-time replacement secrets cannot be replayed",
-          "urn:smcp:problem:rotation-already-created",
+        await dependencies.clerk.revokeApiKey(
+          replacement.id,
+          "Conflicting rotation operation",
         );
       }
       throw error;
@@ -629,7 +677,8 @@ export async function buildApp(
       }
     }
     return reply.status(201).send({
-      ...replacement,
+      ...replacementMetadata,
+      secret,
       rotation: {
         old_key_id: oldKey.id,
         revoke_at: rotation.revoke_at,
@@ -640,7 +689,7 @@ export async function buildApp(
 
   app.delete("/v1/api-keys/:id", async (request, reply) => {
     const session = await sessionPrincipal(request);
-    const { id } = resourceIdParamsSchema.parse(request.params);
+    const { id } = apiKeyIdParamsSchema.parse(request.params);
     const key = await dependencies.clerk.getApiKey(id);
     if (key.subject !== session.tenantSubject) {
       throw new ApiProblem(

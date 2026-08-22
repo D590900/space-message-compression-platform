@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  apiKeyIdParamsSchema,
   createApiKeySchema,
   createCapsulePlanSchema,
   createCompressionSchema,
@@ -9,6 +10,15 @@ import {
 } from "../src/index.js";
 
 describe("shared API schemas", () => {
+  it("accepts opaque Clerk key IDs without accepting path syntax", () => {
+    expect(apiKeyIdParamsSchema.safeParse({ id: "ak_test-123" }).success).toBe(
+      true,
+    );
+    expect(apiKeyIdParamsSchema.safeParse({ id: "../secret" }).success).toBe(
+      false,
+    );
+  });
+
   it("rejects unknown API-key scopes", () => {
     expect(() =>
       createApiKeySchema.parse({
