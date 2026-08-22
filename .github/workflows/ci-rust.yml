@@ -14,6 +14,7 @@ concurrency:
 
 jobs:
   check:
+    name: rust-quality
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -41,6 +42,7 @@ jobs:
           cargo run --quiet --locked -p smcp-capsule-cli -- verify packages/test-vectors/capsules/v1-golden.capsule
 
   fuzz-smoke:
+    name: rust-fuzz
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
