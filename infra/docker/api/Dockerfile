@@ -1,11 +1,11 @@
 # syntax=docker/dockerfile:1.12
-FROM rust:1.98.0-slim-bookworm AS capsule-build
+FROM rust:1.98.0-slim-bookworm@sha256:94e9efa4033213dbb70d4f665527e7ece3944ddb7ba1dd2e43f6fd6e2490af58 AS capsule-build
 WORKDIR /workspace
 COPY Cargo.toml Cargo.lock ./
 COPY crates crates
 RUN cargo build --locked --release -p smcp-capsule-cli
 
-FROM node:24.8.0-bookworm-slim AS build
+FROM node:24.8.0-bookworm-slim@sha256:cadbfafeb6baf87eaaffa40b3640209c4b7fd38cebde65059d15bc39cd636b85 AS build
 ENV PNPM_HOME=/pnpm
 ENV PATH=/pnpm:$PATH
 RUN corepack enable && corepack prepare pnpm@11.6.0 --activate
@@ -21,9 +21,16 @@ RUN pnpm install --offline --frozen-lockfile --force \
     && pnpm --filter @smcp/api build \
     && pnpm --filter @smcp/api deploy --prod /opt/smcp-api
 
-FROM node:24.8.0-bookworm-slim AS runtime
+FROM node:24.8.0-bookworm-slim@sha256:cadbfafeb6baf87eaaffa40b3640209c4b7fd38cebde65059d15bc39cd636b85 AS runtime
 ENV NODE_ENV=production
-RUN groupadd --system smcp \
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && apt-get clean \
+    && find /var/lib/apt/lists -mindepth 1 -delete \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+    && rm -f /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
+      /usr/local/bin/pnpm /usr/local/bin/pnpx /usr/local/bin/yarn /usr/local/bin/yarnpkg \
+    && groupadd --system smcp \
     && useradd --system --gid smcp --home-dir /opt/smcp-api smcp
 WORKDIR /opt/smcp-api
 COPY --from=build --chown=smcp:smcp /opt/smcp-api ./
