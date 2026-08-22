@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
@@ -44,6 +44,8 @@ class ProbeResult:
 @dataclass(frozen=True, slots=True)
 class PreparedInput:
     original_bytes: bytes
+    canonical_bytes: bytes | None = None
+    canonical_mime: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,3 +68,5 @@ class QualityReport:
     original_sha256: str
     decoded_sha256: str
     quality_gate_passed: bool
+    metrics: dict[str, float | int | str | bool | None] = field(default_factory=dict)
+    gate_failures: tuple[str, ...] = ()

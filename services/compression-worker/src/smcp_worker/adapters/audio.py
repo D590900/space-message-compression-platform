@@ -1,0 +1,280 @@
+from __future__ import annotations
+
+import io
+import struct
+import subprocess
+import tempfile
+import wave
+from pathlib import Path
+
+from smcp_worker.adapters.external import (
+    digest,
+    executable,
+    pareto_smallest_per_codec,
+    run,
+    transform,
+    version_line,
+)
+from smcp_worker.models import (
+    CodecCapabilities,
+    EncodedCandidate,
+    EncodeParams,
+    PreparedInput,
+    ProbeResult,
+    Profile,
+    QualityReport,
+    SourceObject,
+)
+
+AUDIO_MIME_PREFIXES = ("audio/",)
+
+
+def _ffmpeg_capability() -> CodecCapabilities:
+    ffmpeg = executable("ffmpeg")
+    ffprobe = executable("ffprobe")
+    if ffmpeg is None or ffprobe is None:
+        missing = [
+            name for name, path in (("ffmpeg", ffmpeg), ("ffprobe", ffprobe)) if path is None
+        ]
+        return CodecCapabilities(
+            codec_id="audio.opus",
+            codec_version="unavailable",
+            content_types=("AUDIO",),
+            profiles=(Profile.FAITHFUL, Profile.ULTRA),
+            enabled=False,
+            deterministic=True,
+            disabled_reason=f"required executables are not installed: {', '.join(missing)}",
+            install_hint="Install FFmpeg with libopus enabled.",
+        )
+    encoders = run((ffmpeg, "-hide_banner", "-encoders"), timeout=30)
+    if "libopus" not in encoders.stdout:
+        return CodecCapabilities(
+            codec_id="audio.opus",
+            codec_version=version_line((ffmpeg, "-version")),
+            content_types=("AUDIO",),
+            profiles=(Profile.FAITHFUL, Profile.ULTRA),
+            enabled=False,
+            deterministic=True,
+            disabled_reason="FFmpeg was built without the libopus encoder",
+            install_hint="Install an FFmpeg build configured with libopus.",
+        )
+    return CodecCapabilities(
+        codec_id="audio.opus",
+        codec_version=version_line((ffmpeg, "-version")),
+        content_types=("AUDIO",),
+        profiles=(Profile.FAITHFUL, Profile.ULTRA),
+        enabled=True,
+        deterministic=True,
+    )
+
+
+class OpusAudioAdapter:
+    def capabilities(self) -> CodecCapabilities:
+        return _ffmpeg_capability()
+
+    def probe(self, source: SourceObject) -> ProbeResult:
+        if not source.declared_mime.startswith(AUDIO_MIME_PREFIXES):
+            return ProbeResult("application/octet-stream", False, "declared MIME is not audio")
+        with tempfile.TemporaryDirectory(prefix="smcp-probe-") as directory:
+            path = Path(directory) / f"input{Path(source.filename).suffix or '.bin'}"
+            path.write_bytes(source.data)
+            try:
+                result = run(
+                    (
+                        "ffprobe",
+                        "-v",
+                        "error",
+                        "-select_streams",
+                        "a:0",
+                        "-show_entries",
+                        "stream=codec_name,sample_rate,channels",
+                        "-of",
+                        "csv=p=0",
+                        str(path),
+                    ),
+                    timeout=30,
+                )
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                return ProbeResult(
+                    "application/octet-stream", False, "FFmpeg could not decode the audio"
+                )
+        accepted = bool(result.stdout.strip())
+        return ProbeResult(
+            source.declared_mime,
+            accepted,
+            "supported decoded audio" if accepted else "audio stream is missing",
+        )
+
+    def preprocess(self, source: SourceObject, profile: Profile) -> PreparedInput:
+        if not self.probe(source).accepted:
+            raise ValueError("source did not pass audio probing")
+        filters = ["aresample=24000", "alimiter=limit=0.95"]
+        if profile == Profile.ULTRA:
+            filters.insert(
+                0,
+                "silenceremove=start_periods=1:start_duration=0.1:start_threshold=-50dB:"
+                "stop_periods=-1:stop_duration=0.2:stop_threshold=-50dB",
+            )
+        canonical = transform(
+            source.data,
+            Path(source.filename).suffix or ".bin",
+            ".wav",
+            (
+                "ffmpeg",
+                "-v",
+                "error",
+                "-nostdin",
+                "-i",
+                "{input}",
+                "-vn",
+                "-map_metadata",
+                "-1",
+                "-af",
+                ",".join(filters),
+                "-ac",
+                "1",
+                "-ar",
+                "24000",
+                "-c:a",
+                "pcm_s16le",
+                "-y",
+                "{output}",
+            ),
+        )
+        return PreparedInput(source.data, canonical, "audio/wav; rate=24000; channels=1")
+
+    def encode(self, prepared: PreparedInput, params: EncodeParams) -> EncodedCandidate:
+        capability = self.capabilities()
+        if not capability.enabled or prepared.canonical_bytes is None:
+            raise RuntimeError(capability.disabled_reason or "canonical audio is missing")
+        payload = transform(
+            prepared.canonical_bytes,
+            ".wav",
+            ".ogg",
+            (
+                "ffmpeg",
+                "-v",
+                "error",
+                "-nostdin",
+                "-i",
+                "{input}",
+                "-map_metadata",
+                "-1",
+                "-c:a",
+                "libopus",
+                "-b:a",
+                f"{params.level}k",
+                "-vbr",
+                "on",
+                "-compression_level",
+                "10",
+                "-application",
+                "audio",
+                "-frame_duration",
+                "60",
+                "-y",
+                "{output}",
+            ),
+        )
+        return EncodedCandidate(
+            "audio.opus",
+            capability.codec_version,
+            {
+                "bitrate_kbps": params.level,
+                "sample_rate": 24000,
+                "channels": 1,
+                "vbr": True,
+                "frame_duration_ms": 60,
+            },
+            payload,
+        )
+
+    def decode(self, candidate: EncodedCandidate) -> bytes:
+        return transform(
+            candidate.payload,
+            ".ogg",
+            ".wav",
+            (
+                "ffmpeg",
+                "-v",
+                "error",
+                "-nostdin",
+                "-i",
+                "{input}",
+                "-ac",
+                "1",
+                "-ar",
+                "24000",
+                "-c:a",
+                "pcm_s16le",
+                "-y",
+                "{output}",
+            ),
+        )
+
+    def measure(self, original: PreparedInput, decoded: bytes) -> QualityReport:
+        if original.canonical_bytes is None:
+            raise ValueError("canonical audio is missing")
+        original_stats = _pcm_stats(original.canonical_bytes)
+        decoded_stats = _pcm_stats(decoded)
+        duration_delta = abs(original_stats["duration_seconds"] - decoded_stats["duration_seconds"])
+        clipping_ratio = decoded_stats["clipped_samples"] / max(decoded_stats["samples"], 1)
+        failures: list[str] = []
+        if duration_delta > 0.02:
+            failures.append("duration_delta_above_20ms")
+        if clipping_ratio > 0.001:
+            failures.append("clipping_ratio_above_0.001")
+        return QualityReport(
+            exact_round_trip=original.canonical_bytes == decoded,
+            original_sha256=digest(original.canonical_bytes),
+            decoded_sha256=digest(decoded),
+            quality_gate_passed=not failures,
+            metrics={
+                "duration_seconds": decoded_stats["duration_seconds"],
+                "duration_delta_seconds": duration_delta,
+                "peak_amplitude": decoded_stats["peak_amplitude"],
+                "clipping_ratio": clipping_ratio,
+                "intelligibility_status": "not_evaluated:no_versioned_asr_model",
+                "speaker_similarity_status": "not_evaluated:no_versioned_speaker_model",
+                "perceptual_quality_status": "not_evaluated:no_versioned_metric_model",
+            },
+            gate_failures=tuple(failures),
+        )
+
+
+def _pcm_stats(payload: bytes) -> dict[str, float | int]:
+    with wave.open(io.BytesIO(payload), "rb") as stream:
+        if stream.getsampwidth() != 2 or stream.getnchannels() != 1:
+            raise ValueError("quality measurement requires mono signed 16-bit PCM")
+        frames = stream.readframes(stream.getnframes())
+        sample_rate = stream.getframerate()
+    samples = struct.unpack(f"<{len(frames) // 2}h", frames)
+    peak = max((abs(sample) for sample in samples), default=0)
+    clipped = sum(abs(sample) >= 32767 for sample in samples)
+    return {
+        "samples": len(samples),
+        "duration_seconds": len(samples) / sample_rate,
+        "peak_amplitude": peak / 32768,
+        "clipped_samples": clipped,
+    }
+
+
+def generate_audio_candidates(
+    source: SourceObject, profile: Profile
+) -> list[tuple[EncodedCandidate, QualityReport]]:
+    adapter = OpusAudioAdapter()
+    if not adapter.capabilities().enabled:
+        return []
+    prepared = adapter.preprocess(source, profile)
+    candidates: list[tuple[EncodedCandidate, QualityReport]] = []
+    for bitrate in (12, 20, 32):
+        candidate = adapter.encode(prepared, EncodeParams(level=bitrate))
+        report = adapter.measure(prepared, adapter.decode(candidate))
+        if report.quality_gate_passed:
+            candidates.append((candidate, report))
+    return pareto_smallest_per_codec(
+        candidates,
+        codec_id=lambda candidate: candidate.codec_id,
+        payload_size=lambda candidate: len(candidate.payload),
+        stable_config=lambda candidate: repr(sorted(candidate.config.items())),
+    )
