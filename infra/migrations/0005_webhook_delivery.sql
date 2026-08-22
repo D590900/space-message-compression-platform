@@ -1,5 +1,3 @@
-BEGIN;
-
 ALTER TABLE webhook_endpoints
   ADD COLUMN event_types text[] NOT NULL DEFAULT '{}',
   ADD COLUMN idempotency_key text,
@@ -26,5 +24,3 @@ ALTER TABLE webhook_deliveries
 
 CREATE UNIQUE INDEX webhook_delivery_event_once_idx
   ON webhook_deliveries (endpoint_id, event_id);
-
-COMMIT;

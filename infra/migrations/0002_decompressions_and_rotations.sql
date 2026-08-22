@@ -1,5 +1,3 @@
-BEGIN;
-
 CREATE TABLE decompression_jobs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_subject text NOT NULL,
@@ -39,6 +37,4 @@ CREATE INDEX decompression_jobs_queue_idx
 CREATE INDEX api_key_rotations_due_idx
   ON api_key_rotations (revoke_at)
   WHERE revoked_at IS NULL;
-
-COMMIT;
 

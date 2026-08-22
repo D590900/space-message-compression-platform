@@ -1,5 +1,3 @@
-BEGIN;
-
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 CREATE TYPE content_type AS ENUM ('TEXT', 'IMAGE', 'AUDIO', 'VIDEO');
@@ -279,6 +277,4 @@ CREATE INDEX compression_jobs_queue_idx ON compression_jobs (status, requested_a
 CREATE INDEX audit_events_tenant_time_idx ON audit_events (tenant_subject, occurred_at DESC);
 CREATE INDEX outbox_unpublished_idx ON outbox_events (created_at) WHERE published_at IS NULL;
 CREATE INDEX webhook_due_idx ON webhook_deliveries (next_attempt_at) WHERE status = 'RETRY';
-
-COMMIT;
 

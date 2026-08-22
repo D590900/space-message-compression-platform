@@ -1,5 +1,3 @@
-BEGIN;
-
 ALTER TABLE projects
   ADD COLUMN idempotency_key text,
   ADD COLUMN request_fingerprint bytea
@@ -26,5 +24,3 @@ ALTER TABLE api_key_rotations
 
 CREATE UNIQUE INDEX api_key_rotations_old_key_once_idx
   ON api_key_rotations (tenant_subject, old_key_id);
-
-COMMIT;
