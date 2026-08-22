@@ -39,3 +39,19 @@ jobs:
         run: |
           sha256sum --check packages/test-vectors/capsules/v1-golden.capsule.sha256
           cargo run --quiet --locked -p smcp-capsule-cli -- verify packages/test-vectors/capsules/v1-golden.capsule
+
+  fuzz-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Install pinned nightly toolchain
+        run: rustup toolchain install nightly-2026-08-15 --profile minimal
+      - name: Install pinned cargo-fuzz
+        run: cargo +nightly-2026-08-15 install cargo-fuzz --version 0.13.2 --locked
+      - name: Fuzz parser
+        run: >-
+          cargo +nightly-2026-08-15 fuzz run parse
+          --fuzz-dir crates/capsule-format/fuzz --
+          -max_total_time=15 -rss_limit_mb=2048 -print_final_stats=1
