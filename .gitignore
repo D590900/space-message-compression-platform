@@ -8,6 +8,7 @@ node_modules/
 .next/
 dist/
 coverage/
+.coverage
 *.tsbuildinfo
 __pycache__/
 .pytest_cache/
@@ -24,4 +25,3 @@ benchmark-results/
 *.p12
 models/
 weights/
-
