@@ -10,7 +10,7 @@ Assets include user identity, organization boundaries, API keys, private content
 | Tampering | Modified uploads, artifacts, manifests or capsules | SHA-256 object identity; immutable keys; CRC32C sections; Merkle root; signed URLs | Integration, golden and corruption tests |
 | Repudiation | Denied key usage, job transitions or webhook sends | Append-only audit events with actor, request ID, key ID, timestamp and outcome; never secret/content | State-machine and audit tests |
 | Information disclosure | Cross-tenant reads, secrets in logs, public buckets | Tenant predicate on every query; private storage; short TTL; structured redaction; no payload spans | Authorization matrix and log scans |
-| Denial of service | Oversized files, bombs, parser allocations, expensive codecs | Byte/pixel/frame/duration/count limits; MIME sniffing; time/memory/process limits; rate/cost limits; bounded parser | Malicious corpus, property tests, fuzzing and load tests |
+| Denial of service | Oversized files, bombs, parser allocations, expensive codecs or key multiplication | Byte/pixel/frame/duration/count limits; MIME sniffing; time/memory/process limits; pre-auth shield; atomic tenant-wide and credential/endpoint cost budgets; bounded parser | Malicious corpus, rate-limit integration tests, property tests, fuzzing and load tests |
 | Elevation of privilege | Scope bypass, worker breakout, unsafe decoder | Central policy; least-privilege IAM; non-root/read-only/no-network media subprocess; no Rust `unsafe` by default | Policy unit tests and container hardening checks |
 
 ## Supply-chain controls
@@ -24,4 +24,3 @@ Assets include user identity, organization boundaries, API keys, private content
 ## Retention and incident response
 
 Projects configure original retention; deletion jobs remove originals and tombstone the event while preserving content-free audit data. Key compromise response revokes through Clerk, invalidates verification cache and reviews key-ID audit history. Integrity failure quarantines the object/capsule and never falls back to unverified output.
-

@@ -38,6 +38,16 @@ const configSchema = z
       .max(900)
       .default(300),
     MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(1_073_741_824),
+    TENANT_RATE_COST_PER_MINUTE: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(1_000),
+    CREDENTIAL_ROUTE_COST_PER_MINUTE: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(120),
     CAPSULE_CLI_PATH: z.string().min(1).default("smcp-capsule"),
     KEY_ROTATION_POLL_MS: z.coerce
       .number()

@@ -34,6 +34,12 @@ Every project receives hard monthly limits for input bytes, compression jobs and
 
 `GET /v1/projects/{id}/usage` requires `jobs:read` and returns the current UTC calendar-month counters, active job count and configured limits. The initial migration defaults are 10 GiB input, 10,000 compression jobs, 100 concurrent jobs and 1,000 capsules per project per month. Operators should set plan-specific values through controlled database administration until the billing/admin surface is introduced.
 
+## Rate and cost limits
+
+The API applies two layers. A 120-request-per-minute pre-authentication shield limits abusive traffic by a SHA-256 digest of the supplied credential or client address and route. After Clerk authentication, one atomic Valkey script charges both a tenant-wide budget and a credential-plus-endpoint budget. This prevents a tenant from multiplying capacity by creating more keys while still containing one hot or compromised credential. Identifiers are hashed before they enter Valkey keys.
+
+Read and delete operations cost 1 unit, ordinary mutations cost 2, upload presigning and webhook creation cost 5, compression/decompression cost 10, and capsule planning/build creation cost 20. `TENANT_RATE_COST_PER_MINUTE` defaults to 1,000 units and `CREDENTIAL_ROUTE_COST_PER_MINUTE` to 120 units in a fixed one-minute window. Exhaustion fails closed with status `429` and `urn:smcp:problem:rate-limit-exceeded`. These operational limits complement, rather than replace, the durable per-project PostgreSQL quotas.
+
 ## Worker delivery recovery
 
 The worker leaves a failed non-terminal stream delivery pending and reclaims it after `WORKER_CLAIM_IDLE_MS` (30 minutes by default) with `XAUTOCLAIM`. Set that idle threshold above the longest permitted single codec execution in the deployment so a second worker cannot reclaim active work. `WORKER_CLAIM_BATCH` bounds each reclaim pass, and `WORKER_MAX_ATTEMPTS` (default 3) terminalizes a repeatedly crashing or failing job. PostgreSQL is authoritative: completed deliveries are acknowledged without rerunning side effects, and stale compression attempts remove tracked partial artifacts before restarting.

@@ -7,6 +7,11 @@ import type { Database } from "../src/database.js";
 import type { JobQueue } from "../src/queue.js";
 import type { ObjectStorage } from "../src/storage.js";
 
+const rateLimiter = {
+  consume: () => Promise.resolve(),
+  close: () => Promise.resolve(),
+};
+
 const config = loadConfig({
   NODE_ENV: "test",
   LOG_LEVEL: "silent",
@@ -83,7 +88,13 @@ describe("system capability routes", () => {
     } as unknown as Database;
     const queue = { close: () => Promise.resolve() } as unknown as JobQueue;
     const storage = {} as ObjectStorage;
-    const { app } = await buildApp(config, { database, queue, storage, clerk });
+    const { app } = await buildApp(config, {
+      database,
+      queue,
+      storage,
+      clerk,
+      rateLimiter,
+    });
     apps.push(app);
 
     const response = await app.inject({

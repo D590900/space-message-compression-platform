@@ -55,6 +55,10 @@ function dependencies(database: Database, clerk: ClerkGateway) {
     start: () => undefined,
     close: () => Promise.resolve(),
   };
+  const rateLimiter = {
+    consume: () => Promise.resolve(),
+    close: () => Promise.resolve(),
+  };
   return {
     database,
     clerk,
@@ -62,6 +66,7 @@ function dependencies(database: Database, clerk: ClerkGateway) {
     storage,
     keyRotationScheduler,
     webhookDispatcher,
+    rateLimiter,
   };
 }
 
