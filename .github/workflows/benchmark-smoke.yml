@@ -13,6 +13,7 @@ permissions:
 
 jobs:
   smoke:
+    name: benchmark-smoke
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
