@@ -4,6 +4,7 @@ import rateLimit from "@fastify/rate-limit";
 import {
   createApiKeySchema,
   createCompressionSchema,
+  createDecompressionSchema,
   createProjectSchema,
   idempotencyKeySchema,
   presignUploadSchema,
@@ -287,6 +288,64 @@ export async function buildApp(
         principal.tenantSubject,
         id,
       ),
+    };
+  });
+
+  app.get("/v1/artifacts/:id/download", async (request) => {
+    const principal = await apiPrincipal(request, "artifacts:read");
+    const { id } = resourceIdParamsSchema.parse(request.params);
+    const artifact = await dependencies.database.getArtifact(
+      principal.tenantSubject,
+      id,
+    );
+    return {
+      artifact_id: artifact.id,
+      sha256: artifact.sha256_hex,
+      bytes: artifact.bytes,
+      download_url: await dependencies.storage.presignDownload(
+        artifact.object_key,
+      ),
+      expires_in_seconds: config.SIGNED_URL_TTL_SECONDS,
+    };
+  });
+
+  app.post("/v1/decompressions", async (request, reply) => {
+    const principal = await apiPrincipal(request, "decompressions:create");
+    const input = createDecompressionSchema.parse(request.body);
+    const result = await dependencies.database.createDecompressionJob(
+      principal.tenantSubject,
+      principal.actorSubject,
+      principal.keyId,
+      request.id,
+      idempotencyKey(request),
+      input,
+    );
+    if (result.created) {
+      await dependencies.queue.publishDecompression(
+        result.job.id,
+        principal.tenantSubject,
+      );
+    }
+    return reply.status(202).send(result.job);
+  });
+
+  app.get("/v1/decompressions/:id", async (request) => {
+    const principal = await apiPrincipal(request, "artifacts:read");
+    const { id } = resourceIdParamsSchema.parse(request.params);
+    const job = await dependencies.database.getDecompressionJob(
+      principal.tenantSubject,
+      id,
+    );
+    return {
+      ...job,
+      ...(job.status === "COMPLETED" && job.output_object_key
+        ? {
+            download_url: await dependencies.storage.presignDownload(
+              job.output_object_key,
+            ),
+            expires_in_seconds: config.SIGNED_URL_TTL_SECONDS,
+          }
+        : {}),
     };
   });
 

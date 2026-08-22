@@ -31,6 +31,21 @@ export class JobQueue {
     );
   }
 
+  public async publishDecompression(
+    jobId: string,
+    tenantSubject: string,
+  ): Promise<void> {
+    if (this.redis.status === "wait") await this.redis.connect();
+    await this.redis.xadd(
+      "smcp:decompression-jobs",
+      "*",
+      "decompression_id",
+      jobId,
+      "tenant_subject",
+      tenantSubject,
+    );
+  }
+
   public async close(): Promise<void> {
     if (this.redis.status !== "end") await this.redis.quit();
   }

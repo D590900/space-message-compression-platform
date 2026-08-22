@@ -17,12 +17,17 @@ from redis import Redis
 from redis.exceptions import ResponseError
 
 from smcp_worker.adapters import text as text_module
-from smcp_worker.adapters.text import generate_text_candidates
-from smcp_worker.models import Profile, SourceObject
+from smcp_worker.adapters.text import (
+    BrotliTextAdapter,
+    ZstandardTextAdapter,
+    generate_text_candidates,
+)
+from smcp_worker.models import EncodedCandidate, Profile, SourceObject
 from smcp_worker.settings import Settings
 
 LOGGER = logging.getLogger(__name__)
-STREAM = "smcp:compression-jobs"
+COMPRESSION_STREAM = "smcp:compression-jobs"
+DECOMPRESSION_STREAM = "smcp:decompression-jobs"
 
 
 class CompressionWorker:
@@ -40,45 +45,52 @@ class CompressionWorker:
             ),
         )
 
-    def ensure_group(self) -> None:
-        try:
-            self.redis.xgroup_create(STREAM, self.settings.worker_group, id="0", mkstream=True)
-        except ResponseError as error:
-            if "BUSYGROUP" not in str(error):
-                raise
+    def ensure_groups(self) -> None:
+        for stream in (COMPRESSION_STREAM, DECOMPRESSION_STREAM):
+            try:
+                self.redis.xgroup_create(stream, self.settings.worker_group, id="0", mkstream=True)
+            except ResponseError as error:
+                if "BUSYGROUP" not in str(error):
+                    raise
 
     def run_forever(self) -> None:
-        self.ensure_group()
+        self.ensure_groups()
         while True:
             messages = cast(
                 list[tuple[str, list[tuple[str, dict[str, str]]]]],
                 self.redis.xreadgroup(
                     self.settings.worker_group,
                     self.settings.worker_consumer_name,
-                    {STREAM: ">"},
+                    {COMPRESSION_STREAM: ">", DECOMPRESSION_STREAM: ">"},
                     count=1,
                     block=self.settings.worker_block_ms,
                 ),
             )
-            for _stream, entries in messages:
+            for stream, entries in messages:
                 for message_id, fields in entries:
-                    self.process_message(message_id, fields)
+                    self.process_message(stream, message_id, fields)
 
-    def process_message(self, message_id: str, fields: dict[str, str]) -> None:
-        job_id = fields.get("job_id")
+    def process_message(self, stream: str, message_id: str, fields: dict[str, str]) -> None:
+        id_field = "job_id" if stream == COMPRESSION_STREAM else "decompression_id"
+        job_id = fields.get(id_field)
         tenant_subject = fields.get("tenant_subject")
         if not job_id or not tenant_subject:
             LOGGER.error("rejecting malformed queue message", extra={"message_id": message_id})
-            self.redis.xack(STREAM, self.settings.worker_group, message_id)
+            self.redis.xack(stream, self.settings.worker_group, message_id)
             return
         try:
-            self.process_job(job_id, tenant_subject)
+            if stream == COMPRESSION_STREAM:
+                self.process_job(job_id, tenant_subject)
+            elif stream == DECOMPRESSION_STREAM:
+                self.process_decompression(job_id, tenant_subject)
+            else:
+                raise ValueError("unknown worker stream")
         except Exception:
-            LOGGER.exception("compression job failed", extra={"job_id": job_id})
-            self._fail_job(job_id, tenant_subject, "WORKER_FAILURE")
+            LOGGER.exception("worker job failed", extra={"job_id": job_id, "stream": stream})
+            self._fail_job(stream, job_id, tenant_subject, "WORKER_FAILURE")
             raise
         else:
-            self.redis.xack(STREAM, self.settings.worker_group, message_id)
+            self.redis.xack(stream, self.settings.worker_group, message_id)
 
     def process_job(self, job_id: str, tenant_subject: str) -> None:
         with psycopg.connect(self.settings.database_url, row_factory=dict_row) as connection:
@@ -265,6 +277,137 @@ class CompressionWorker:
             )
             connection.commit()
 
+    def process_decompression(self, decompression_id: str, tenant_subject: str) -> None:
+        with psycopg.connect(self.settings.database_url, row_factory=dict_row) as connection:
+            job = connection.execute(
+                """
+                SELECT d.*, a.object_key AS artifact_object_key,
+                       c.codec_id, c.codec_version, c.quality_metrics,
+                       c.sha256 AS candidate_sha256
+                FROM decompression_jobs d
+                JOIN artifacts a
+                  ON a.id = d.artifact_id AND a.tenant_subject = d.tenant_subject
+                JOIN encoding_candidates c
+                  ON c.id = a.candidate_id AND c.tenant_subject = a.tenant_subject
+                WHERE d.id = %s AND d.tenant_subject = %s
+                """,
+                (decompression_id, tenant_subject),
+            ).fetchone()
+            if not job:
+                raise ValueError("decompression job does not exist for tenant")
+            if job["status"] in {"COMPLETED", "FAILED_TERMINAL"}:
+                return
+            if job["status"] != "PENDING":
+                raise RuntimeError("decompression job is not claimable")
+
+            updated = connection.execute(
+                """
+                UPDATE decompression_jobs SET status = 'DECODING'
+                WHERE id = %s AND tenant_subject = %s AND status = 'PENDING'
+                RETURNING id
+                """,
+                (decompression_id, tenant_subject),
+            ).fetchone()
+            if not updated:
+                connection.rollback()
+                raise RuntimeError("decompression claim lost")
+            connection.commit()
+
+            response = self.s3.get_object(
+                Bucket=self.settings.s3_bucket, Key=job["artifact_object_key"]
+            )
+            payload = response["Body"].read(self.settings.max_upload_bytes + 1)
+            if len(payload) > self.settings.max_upload_bytes:
+                self._terminal_decompression_failure(
+                    connection, decompression_id, tenant_subject, "ARTIFACT_TOO_LARGE"
+                )
+                return
+            if hashlib.sha256(payload).digest() != bytes(job["candidate_sha256"]):
+                self._terminal_decompression_failure(
+                    connection, decompression_id, tenant_subject, "ARTIFACT_HASH_MISMATCH"
+                )
+                return
+
+            candidate = EncodedCandidate(
+                codec_id=job["codec_id"],
+                codec_version=job["codec_version"],
+                config={"dictionary_sha256": None},
+                payload=payload,
+            )
+            if candidate.codec_id == "text.brotli":
+                decoded = BrotliTextAdapter().decode(candidate)
+            elif candidate.codec_id == "text.zstandard":
+                decoded = ZstandardTextAdapter().decode(candidate)
+            else:
+                self._terminal_decompression_failure(
+                    connection, decompression_id, tenant_subject, "DECODER_UNAVAILABLE"
+                )
+                return
+
+            connection.execute(
+                """
+                UPDATE decompression_jobs SET status = 'VERIFYING'
+                WHERE id = %s AND tenant_subject = %s AND status = 'DECODING'
+                """,
+                (decompression_id, tenant_subject),
+            )
+            connection.commit()
+
+            output_digest = hashlib.sha256(decoded).hexdigest()
+            expected_digest = job["quality_metrics"].get("original_sha256")
+            if output_digest != expected_digest:
+                self._terminal_decompression_failure(
+                    connection, decompression_id, tenant_subject, "ROUND_TRIP_MISMATCH"
+                )
+                return
+            output_key = (
+                f"{tenant_subject}/{job['project_id']}/decompressions/{decompression_id}.bin"
+            )
+            self.s3.put_object(
+                Bucket=self.settings.s3_bucket,
+                Key=output_key,
+                Body=decoded,
+                ContentType="text/plain; charset=utf-8",
+                ServerSideEncryption="AES256",
+                Metadata={"sha256": output_digest, "verified": "true"},
+            )
+            completed = connection.execute(
+                """
+                UPDATE decompression_jobs
+                SET status = 'COMPLETED', output_object_key = %s, output_bytes = %s,
+                    output_sha256 = %s, verified = true, completed_at = now()
+                WHERE id = %s AND tenant_subject = %s AND status = 'VERIFYING'
+                RETURNING project_id
+                """,
+                (
+                    output_key,
+                    len(decoded),
+                    bytes.fromhex(output_digest),
+                    decompression_id,
+                    tenant_subject,
+                ),
+            ).fetchone()
+            if not completed:
+                connection.rollback()
+                raise RuntimeError("decompression state changed before completion")
+            connection.execute(
+                """
+                INSERT INTO audit_events (
+                  tenant_subject, project_id, actor_subject, action, resource_type,
+                  resource_id, request_id, outcome, metadata
+                ) VALUES (%s, %s, 'compression-worker', 'decompression.completed',
+                          'decompression_job', %s, %s, 'success', %s)
+                """,
+                (
+                    tenant_subject,
+                    completed["project_id"],
+                    decompression_id,
+                    f"worker:{decompression_id}",
+                    json.dumps({"output_bytes": len(decoded), "output_sha256": output_digest}),
+                ),
+            )
+            connection.commit()
+
     @staticmethod
     def _transition(
         connection: psycopg.Connection[Any],
@@ -301,14 +444,42 @@ class CompressionWorker:
         )
         connection.commit()
 
-    def _fail_job(self, job_id: str, tenant_subject: str, code: str) -> None:
+    @staticmethod
+    def _terminal_decompression_failure(
+        connection: psycopg.Connection[Any],
+        decompression_id: str,
+        tenant_subject: str,
+        code: str,
+    ) -> None:
+        connection.execute(
+            """
+            UPDATE decompression_jobs
+            SET status = 'FAILED_TERMINAL', error_code = %s, completed_at = now()
+            WHERE id = %s AND tenant_subject = %s
+            """,
+            (code, decompression_id, tenant_subject),
+        )
+        connection.commit()
+
+    def _fail_job(self, stream: str, job_id: str, tenant_subject: str, code: str) -> None:
         with psycopg.connect(self.settings.database_url) as connection:
-            connection.execute(
-                """
-                UPDATE compression_jobs
-                SET status = 'FAILED_RETRYABLE', error_code = %s, attempt = attempt + 1
-                WHERE id = %s AND tenant_subject = %s
-                  AND status NOT IN ('COMPLETED', 'FAILED_TERMINAL', 'CANCELLED')
-                """,
-                (code, job_id, tenant_subject),
-            )
+            if stream == COMPRESSION_STREAM:
+                connection.execute(
+                    """
+                    UPDATE compression_jobs
+                    SET status = 'FAILED_RETRYABLE', error_code = %s, attempt = attempt + 1
+                    WHERE id = %s AND tenant_subject = %s
+                      AND status NOT IN ('COMPLETED', 'FAILED_TERMINAL', 'CANCELLED')
+                    """,
+                    (code, job_id, tenant_subject),
+                )
+            else:
+                connection.execute(
+                    """
+                    UPDATE decompression_jobs
+                    SET status = 'FAILED_RETRYABLE', error_code = %s
+                    WHERE id = %s AND tenant_subject = %s
+                      AND status NOT IN ('COMPLETED', 'FAILED_TERMINAL')
+                    """,
+                    (code, job_id, tenant_subject),
+                )
