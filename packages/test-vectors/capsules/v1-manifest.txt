@@ -1,0 +1,6 @@
+format=SMCP-Capsule-v1
+decoder=smcp-capsule-cli-0.1.0
+codec=text.brotli
+codec-version=test-vector
+reconstruction-class=faithful
+

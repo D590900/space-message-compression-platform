@@ -1,0 +1,22 @@
+[package]
+name = "smcp-capsule-format"
+description = "Deterministic, budget-safe SMCP Capsule Format v1 encoder and parser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+crc32c = "0.6.8"
+reed-solomon-erasure = "6.0.0"
+sha2 = "0.10.9"
+thiserror = "2.0.18"
+uuid = { version = "1.18.1", default-features = false }
+
+[dev-dependencies]
+proptest = "1.8.0"
+
+[lints]
+workspace = true
+
