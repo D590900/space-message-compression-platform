@@ -56,6 +56,12 @@ const configSchema = z
       .min(100)
       .max(60_000)
       .default(5_000),
+    JOB_OUTBOX_POLL_MS: z.coerce
+      .number()
+      .int()
+      .min(100)
+      .max(60_000)
+      .default(250),
     WEBHOOK_SECRET_ENCRYPTION_KEY: z.string().refine((value) => {
       try {
         return Buffer.from(value, "base64").length === 32;
