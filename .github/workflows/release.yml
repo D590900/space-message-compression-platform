@@ -12,7 +12,41 @@ permissions:
   artifact-metadata: write
 
 jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Check out full repository history
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+      - name: Require a merged, version-consistent release commit
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version=${VERSION#v}
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
+          manifest_versions=(
+            "$(jq -r '.version' package.json)"
+            "$(jq -r '.version' apps/api/package.json)"
+            "$(jq -r '.version' apps/cli/package.json)"
+            "$(jq -r '.version' packages/schemas/package.json)"
+            "$(jq -r '.version' packages/sdk-typescript/package.json)"
+            "$(sed -nE 's/^version = "([^"]+)"$/\1/p' Cargo.toml)"
+            "$(sed -nE 's/^version = "([^"]+)"$/\1/p' services/compression-worker/pyproject.toml)"
+            "$(sed -nE 's/^version = "([^"]+)"$/\1/p' packages/sdk-python/pyproject.toml)"
+          )
+          for manifest_version in "${manifest_versions[@]}"; do
+            [[ -n "$manifest_version" && "$manifest_version" == "$version" ]]
+          done
+
   images:
+    needs: preflight
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
