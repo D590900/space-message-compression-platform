@@ -52,6 +52,7 @@ const clerk: ClerkGateway = {
   createApiKey: () => Promise.resolve(key),
   listApiKeys: () => Promise.resolve({ data: [key], totalCount: 1 }),
   getApiKey: () => Promise.resolve(key),
+  getApiKeySecret: () => Promise.resolve("test-secret"),
   revokeApiKey: () => Promise.resolve(),
 };
 

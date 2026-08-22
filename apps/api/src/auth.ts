@@ -50,6 +50,7 @@ export interface ClerkGateway {
   }): Promise<ManagedApiKey>;
   listApiKeys(subject: string): Promise<ApiKeyPage>;
   getApiKey(id: string): Promise<ManagedApiKey>;
+  getApiKeySecret(id: string): Promise<string>;
   revokeApiKey(id: string, reason: string): Promise<void>;
 }
 
@@ -95,11 +96,20 @@ export class ProductionClerkGateway implements ClerkGateway {
   }
 
   public listApiKeys(subject: string): Promise<ApiKeyPage> {
-    return this.client.apiKeys.list({ subject, includeInvalid: true });
+    return this.client.apiKeys.list({
+      subject,
+      includeInvalid: true,
+      limit: 500,
+    });
   }
 
   public getApiKey(id: string): Promise<ManagedApiKey> {
     return this.client.apiKeys.get(id);
+  }
+
+  public async getApiKeySecret(id: string): Promise<string> {
+    const result = await this.client.apiKeys.getSecret(id);
+    return result.secret;
   }
 
   public async revokeApiKey(id: string, reason: string): Promise<void> {
