@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import rateLimit from "@fastify/rate-limit";
 import {
   createApiKeySchema,
+  createCapsulePlanSchema,
+  createCapsuleSchema,
   createCompressionSchema,
   createDecompressionSchema,
   createProjectSchema,
@@ -10,6 +12,7 @@ import {
   presignUploadSchema,
   resourceIdParamsSchema,
   rotateApiKeySchema,
+  verifyCapsuleSchema,
   type ApiScope,
 } from "@smcp/schemas";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
@@ -21,6 +24,10 @@ import {
   requireSession,
 } from "./auth.js";
 import type { ApiConfig } from "./config.js";
+import {
+  type CapsulePlannerGateway,
+  RustCapsulePlanner,
+} from "./capsule-planner.js";
 import { Database } from "./database.js";
 import { toWebRequest } from "./http-request.js";
 import { ApiProblem, registerProblemHandler } from "./problem.js";
@@ -32,6 +39,7 @@ export type AppDependencies = {
   queue: JobQueue;
   storage: ObjectStorage;
   clerk: ClerkGateway;
+  capsulePlanner: CapsulePlannerGateway;
 };
 
 function idempotencyKey(request: FastifyRequest): string {
@@ -51,6 +59,9 @@ export async function buildApp(
     queue: overrides.queue ?? new JobQueue(config.VALKEY_URL),
     storage: overrides.storage ?? new ObjectStorage(config),
     clerk: overrides.clerk ?? new ProductionClerkGateway(config),
+    capsulePlanner:
+      overrides.capsulePlanner ??
+      new RustCapsulePlanner(config.CAPSULE_CLI_PATH),
   };
 
   const app = Fastify({
@@ -100,6 +111,189 @@ export async function buildApp(
     await apiPrincipal(request, "codecs:read");
     const data = await dependencies.database.listModelManifests();
     return { total_count: data.length, data };
+  });
+
+  app.post("/v1/capsule-plans", async (request, reply) => {
+    const principal = await apiPrincipal(request, "capsules:plan");
+    const input = createCapsulePlanSchema.parse(request.body);
+    const candidates = await dependencies.database.getCapsuleCandidates(
+      principal.tenantSubject,
+      input.project_id,
+      input.items.map((item) => item.job_id),
+    );
+    const byJob = Map.groupBy(candidates, (candidate) => candidate.job_id);
+    const contentTypes = new Set(
+      candidates.map((candidate) => candidate.input_type),
+    );
+    const parityShards =
+      input.ecc_percent === 0
+        ? 0
+        : Math.max(1, Math.ceil((input.ecc_percent * 10) / 100));
+    const protectedMetadataBytes = input.items.length * 384 + 64;
+    const sectionCount = 3 + contentTypes.size + 1 + (parityShards > 0 ? 1 : 0);
+    const fixedOverheadBytes =
+      64 +
+      sectionCount * 64 +
+      protectedMetadataBytes +
+      (parityShards > 0
+        ? 12 + Math.ceil(protectedMetadataBytes / 10) * parityShards
+        : 0);
+    const plannerResult = await dependencies.capsulePlanner.plan({
+      budget_bytes: input.budget_bytes,
+      fixed_overhead_bytes: fixedOverheadBytes,
+      items: input.items.map((item) => ({
+        id: item.job_id,
+        required: item.required,
+        candidates: (byJob.get(item.job_id) ?? []).map((candidate) => {
+          const streamBytes =
+            candidate.payload_bytes + candidate.container_overhead_bytes + 10;
+          const eccBytes =
+            parityShards > 0 ? Math.ceil(streamBytes / 10) * parityShards : 0;
+          return {
+            id: candidate.candidate_id,
+            bytes: streamBytes + eccBytes,
+            utility: item.utility,
+          };
+        }),
+      })),
+    });
+    const byCandidate = new Map(
+      candidates.map((candidate) => [candidate.candidate_id, candidate]),
+    );
+    const selections = plannerResult.selections.map((selection) => {
+      const candidate = selection.candidate_id
+        ? byCandidate.get(selection.candidate_id)
+        : undefined;
+      return {
+        ...selection,
+        artifact_id: candidate?.artifact_id ?? null,
+        content_type: candidate?.input_type ?? null,
+        codec_id: candidate?.codec_id ?? null,
+        codec_version: candidate?.codec_version ?? null,
+        payload_bytes: candidate?.payload_bytes ?? 0,
+      };
+    });
+    const result = await dependencies.database.createCapsulePlan(
+      principal.tenantSubject,
+      principal.actorSubject,
+      principal.keyId,
+      request.id,
+      idempotencyKey(request),
+      input,
+      plannerResult.solver,
+      {
+        ...plannerResult,
+        fixed_overhead_bytes: fixedOverheadBytes,
+        selections,
+      },
+    );
+    return reply.status(result.created ? 201 : 200).send(result.plan);
+  });
+
+  app.get("/v1/capsule-plans/:id", async (request) => {
+    const principal = await apiPrincipal(request, "capsules:read");
+    const { id } = resourceIdParamsSchema.parse(request.params);
+    return dependencies.database.getCapsulePlan(principal.tenantSubject, id);
+  });
+
+  app.post("/v1/capsules", async (request, reply) => {
+    const principal = await apiPrincipal(request, "capsules:create");
+    const input = createCapsuleSchema.parse(request.body);
+    const result = await dependencies.database.createCapsuleJob(
+      principal.tenantSubject,
+      principal.actorSubject,
+      principal.keyId,
+      request.id,
+      idempotencyKey(request),
+      input,
+    );
+    if (result.created) {
+      await dependencies.queue.publishCapsule(
+        result.capsule.id,
+        principal.tenantSubject,
+      );
+    }
+    return reply.status(202).send(result.capsule);
+  });
+
+  app.post("/v1/capsules/verify", async (request) => {
+    const principal = await apiPrincipal(request, "capsules:read");
+    const input = verifyCapsuleSchema.parse(request.body);
+    const capsule = await dependencies.database.getCapsule(
+      principal.tenantSubject,
+      input.capsule_id,
+    );
+    if (capsule.project_id !== input.project_id) {
+      throw new ApiProblem(
+        404,
+        "Capsule not found",
+        "urn:smcp:problem:not-found",
+      );
+    }
+    if (
+      capsule.status !== "COMPLETED" ||
+      !capsule.sha256_hex ||
+      !capsule.merkle_root_hex ||
+      capsule.actual_bytes === null
+    ) {
+      throw new ApiProblem(
+        409,
+        "Capsule has not completed build-time verification",
+        "urn:smcp:problem:invalid-state",
+      );
+    }
+    return {
+      valid: true,
+      capsule_id: capsule.id,
+      actual_bytes: capsule.actual_bytes,
+      budget_bytes: capsule.budget_bytes,
+      within_budget: capsule.actual_bytes <= capsule.budget_bytes,
+      sha256: capsule.sha256_hex,
+      merkle_root: capsule.merkle_root_hex,
+      format: `${capsule.format_major}.${capsule.format_minor}`,
+      verification_source: "build-time-rust-verifier",
+      verified_at: capsule.completed_at,
+    };
+  });
+
+  app.get("/v1/capsules/:id", async (request) => {
+    const principal = await apiPrincipal(request, "capsules:read");
+    const { id } = resourceIdParamsSchema.parse(request.params);
+    return dependencies.database.getCapsule(principal.tenantSubject, id);
+  });
+
+  app.get("/v1/capsules/:id/manifest", async (request) => {
+    const principal = await apiPrincipal(request, "capsules:read");
+    const { id } = resourceIdParamsSchema.parse(request.params);
+    return dependencies.database.getCapsuleManifest(
+      principal.tenantSubject,
+      id,
+    );
+  });
+
+  app.get("/v1/capsules/:id/download", async (request) => {
+    const principal = await apiPrincipal(request, "capsules:read");
+    const { id } = resourceIdParamsSchema.parse(request.params);
+    const capsule = await dependencies.database.getCapsule(
+      principal.tenantSubject,
+      id,
+    );
+    if (capsule.status !== "COMPLETED" || !capsule.object_key) {
+      throw new ApiProblem(
+        409,
+        "Capsule is not ready for download",
+        "urn:smcp:problem:invalid-state",
+      );
+    }
+    return {
+      capsule_id: id,
+      sha256: capsule.sha256_hex,
+      bytes: capsule.actual_bytes,
+      download_url: await dependencies.storage.presignDownload(
+        capsule.object_key,
+      ),
+      expires_in_seconds: config.SIGNED_URL_TTL_SECONDS,
+    };
   });
 
   app.post("/v1/projects", async (request, reply) => {

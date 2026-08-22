@@ -46,6 +46,21 @@ export class JobQueue {
     );
   }
 
+  public async publishCapsule(
+    capsuleId: string,
+    tenantSubject: string,
+  ): Promise<void> {
+    if (this.redis.status === "wait") await this.redis.connect();
+    await this.redis.xadd(
+      "smcp:capsule-jobs",
+      "*",
+      "capsule_id",
+      capsuleId,
+      "tenant_subject",
+      tenantSubject,
+    );
+  }
+
   public async close(): Promise<void> {
     if (this.redis.status !== "end") await this.redis.quit();
   }

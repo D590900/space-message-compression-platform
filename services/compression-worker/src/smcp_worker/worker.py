@@ -3,12 +3,14 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import struct
+import tempfile
 import time
 from dataclasses import asdict
 from pathlib import Path
 from types import ModuleType
 from typing import Any, cast
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import boto3
 import psycopg
@@ -22,6 +24,7 @@ from smcp_worker.adapters import image as image_module
 from smcp_worker.adapters import text as text_module
 from smcp_worker.adapters import video as video_module
 from smcp_worker.adapters.audio import OpusAudioAdapter, generate_audio_candidates
+from smcp_worker.adapters.external import run
 from smcp_worker.adapters.image import (
     AvifImageAdapter,
     JpegXlImageAdapter,
@@ -40,6 +43,7 @@ from smcp_worker.settings import Settings
 LOGGER = logging.getLogger(__name__)
 COMPRESSION_STREAM = "smcp:compression-jobs"
 DECOMPRESSION_STREAM = "smcp:decompression-jobs"
+CAPSULE_STREAM = "smcp:capsule-jobs"
 
 
 class CompressionWorker:
@@ -59,7 +63,7 @@ class CompressionWorker:
 
     def ensure_groups(self) -> None:
         self._sync_codec_registry()
-        for stream in (COMPRESSION_STREAM, DECOMPRESSION_STREAM):
+        for stream in (COMPRESSION_STREAM, DECOMPRESSION_STREAM, CAPSULE_STREAM):
             try:
                 self.redis.xgroup_create(stream, self.settings.worker_group, id="0", mkstream=True)
             except ResponseError as error:
@@ -114,7 +118,11 @@ class CompressionWorker:
                 self.redis.xreadgroup(
                     self.settings.worker_group,
                     self.settings.worker_consumer_name,
-                    {COMPRESSION_STREAM: ">", DECOMPRESSION_STREAM: ">"},
+                    {
+                        COMPRESSION_STREAM: ">",
+                        DECOMPRESSION_STREAM: ">",
+                        CAPSULE_STREAM: ">",
+                    },
                     count=1,
                     block=self.settings.worker_block_ms,
                 ),
@@ -124,7 +132,13 @@ class CompressionWorker:
                     self.process_message(stream, message_id, fields)
 
     def process_message(self, stream: str, message_id: str, fields: dict[str, str]) -> None:
-        id_field = "job_id" if stream == COMPRESSION_STREAM else "decompression_id"
+        id_field = {
+            COMPRESSION_STREAM: "job_id",
+            DECOMPRESSION_STREAM: "decompression_id",
+            CAPSULE_STREAM: "capsule_id",
+        }.get(stream)
+        if id_field is None:
+            raise ValueError("unknown worker stream")
         job_id = fields.get(id_field)
         tenant_subject = fields.get("tenant_subject")
         if not job_id or not tenant_subject:
@@ -136,12 +150,14 @@ class CompressionWorker:
                 self.process_job(job_id, tenant_subject)
             elif stream == DECOMPRESSION_STREAM:
                 self.process_decompression(job_id, tenant_subject)
+            elif stream == CAPSULE_STREAM:
+                self.process_capsule(job_id, tenant_subject)
             else:
                 raise ValueError("unknown worker stream")
         except Exception:
             LOGGER.exception("worker job failed", extra={"job_id": job_id, "stream": stream})
             self._fail_job(stream, job_id, tenant_subject, "WORKER_FAILURE")
-            raise
+            self.redis.xack(stream, self.settings.worker_group, message_id)
         else:
             self.redis.xack(stream, self.settings.worker_group, message_id)
 
@@ -286,6 +302,23 @@ class CompressionWorker:
                         hashlib.sha256(candidate.payload).digest(),
                     ),
                 )
+                connection.execute(
+                    """
+                    INSERT INTO artifacts (
+                      id, tenant_subject, job_id, candidate_id, kind,
+                      object_key, bytes, sha256
+                    ) VALUES (%s, %s, %s, %s, 'candidate', %s, %s, %s)
+                    """,
+                    (
+                        str(uuid4()),
+                        tenant_subject,
+                        job_id,
+                        candidate_id,
+                        object_key,
+                        len(candidate.payload),
+                        hashlib.sha256(candidate.payload).digest(),
+                    ),
+                )
                 persisted.append((candidate_id, len(candidate.payload), object_key))
             connection.commit()
 
@@ -293,18 +326,12 @@ class CompressionWorker:
             selected_id, selected_bytes, selected_key = min(
                 persisted, key=lambda item: (item[1], item[0])
             )
-            artifact_id = str(uuid4())
             connection.execute(
                 """
-                INSERT INTO artifacts (
-                  id, tenant_subject, job_id, candidate_id, kind, object_key, bytes, sha256
-                )
-                SELECT %s, tenant_subject, job_id, id, 'compressed', object_key,
-                       payload_bytes, sha256
-                FROM encoding_candidates
-                WHERE id = %s AND tenant_subject = %s
+                UPDATE artifacts SET kind = 'compressed'
+                WHERE candidate_id = %s AND tenant_subject = %s
                 """,
-                (artifact_id, selected_id, tenant_subject),
+                (selected_id, tenant_subject),
             )
             connection.commit()
             self._transition(connection, job_id, tenant_subject, "SELECTING", "PACKAGING")
@@ -343,6 +370,278 @@ class CompressionWorker:
                 ),
             )
             connection.commit()
+
+    def process_capsule(self, capsule_id: str, tenant_subject: str) -> None:
+        with psycopg.connect(self.settings.database_url, row_factory=dict_row) as connection:
+            capsule = connection.execute(
+                """
+                SELECT c.*, p.report, p.ecc_percent
+                FROM capsules c
+                JOIN capsule_plans p
+                  ON p.id = c.plan_id AND p.tenant_subject = c.tenant_subject
+                WHERE c.id = %s AND c.tenant_subject = %s
+                """,
+                (capsule_id, tenant_subject),
+            ).fetchone()
+            if not capsule:
+                raise ValueError("capsule does not exist for tenant")
+            if capsule["status"] in {"COMPLETED", "FAILED_TERMINAL"}:
+                return
+            if capsule["status"] != "PENDING":
+                raise RuntimeError("capsule is not claimable")
+            claimed = connection.execute(
+                """
+                UPDATE capsules SET status = 'BUILDING'
+                WHERE id = %s AND tenant_subject = %s AND status = 'PENDING'
+                RETURNING id
+                """,
+                (capsule_id, tenant_subject),
+            ).fetchone()
+            if not claimed:
+                connection.rollback()
+                raise RuntimeError("capsule claim lost")
+            connection.commit()
+
+            raw_selections = capsule["report"].get("selections", [])
+            selections = [
+                selection
+                for selection in raw_selections
+                if selection.get("candidate_id") and selection.get("artifact_id")
+            ]
+            if not selections:
+                raise ValueError("capsule plan selected no artifacts")
+            artifact_ids = [selection["artifact_id"] for selection in selections]
+            artifacts = connection.execute(
+                """
+                SELECT a.id AS artifact_id, a.object_key, a.bytes, a.sha256,
+                       a.candidate_id, a.job_id, c.codec_id, c.codec_version,
+                       j.input_type
+                FROM artifacts a
+                JOIN encoding_candidates c
+                  ON c.id = a.candidate_id AND c.tenant_subject = a.tenant_subject
+                JOIN compression_jobs j
+                  ON j.id = a.job_id AND j.tenant_subject = a.tenant_subject
+                WHERE a.tenant_subject = %s
+                  AND j.project_id = %s
+                  AND a.id = ANY(%s::uuid[])
+                  AND c.quality_gate_passed = true
+                """,
+                (tenant_subject, capsule["project_id"], artifact_ids),
+            ).fetchall()
+            by_artifact = {str(row["artifact_id"]): row for row in artifacts}
+            if len(by_artifact) != len(artifact_ids):
+                raise ValueError("capsule plan references an unavailable artifact")
+
+            payloads: list[tuple[dict[str, Any], dict[str, Any], bytes]] = []
+            for selection in selections:
+                artifact = by_artifact[str(selection["artifact_id"])]
+                response = self.s3.get_object(
+                    Bucket=self.settings.s3_bucket, Key=artifact["object_key"]
+                )
+                payload = response["Body"].read(int(artifact["bytes"]) + 1)
+                if len(payload) != int(artifact["bytes"]):
+                    raise ValueError("capsule artifact size mismatch")
+                if hashlib.sha256(payload).digest() != bytes(artifact["sha256"]):
+                    raise ValueError("capsule artifact hash mismatch")
+                payloads.append((selection, artifact, payload))
+
+            with tempfile.TemporaryDirectory(prefix="smcp-capsule-") as directory:
+                root = Path(directory)
+                sections = self._write_capsule_sections(
+                    root, capsule_id, int(capsule["budget_bytes"]), payloads
+                )
+                output = root / "capsule.smcp"
+                command = [
+                    "smcp-capsule",
+                    "build",
+                    "--output",
+                    str(output),
+                    "--budget",
+                    str(capsule["budget_bytes"]),
+                    "--capsule-id",
+                    capsule_id,
+                    "--ecc-percent",
+                    str(int(capsule["ecc_percent"])),
+                ]
+                if bool(capsule["build_options"].get("pad_to_budget", False)):
+                    command.append("--pad")
+                for kind, path in sections:
+                    command.extend(("--section", f"{kind}={path}"))
+                build_report = json.loads(run(command).stdout)
+                changed = connection.execute(
+                    """
+                    UPDATE capsules SET status = 'VERIFYING'
+                    WHERE id = %s AND tenant_subject = %s AND status = 'BUILDING'
+                    RETURNING id
+                    """,
+                    (capsule_id, tenant_subject),
+                ).fetchone()
+                if not changed:
+                    connection.rollback()
+                    raise RuntimeError("capsule state changed before verification")
+                connection.commit()
+                verify_report = json.loads(
+                    run(("smcp-capsule", "verify", str(output))).stdout
+                )
+                encoded = output.read_bytes()
+
+            if not verify_report.get("valid"):
+                raise ValueError("capsule verifier rejected output")
+            digest = hashlib.sha256(encoded).hexdigest()
+            if digest != build_report.get("sha256"):
+                raise ValueError("capsule build digest mismatch")
+            object_key = (
+                f"{tenant_subject}/{capsule['project_id']}/capsules/{capsule_id}.smcp"
+            )
+            self.s3.put_object(
+                Bucket=self.settings.s3_bucket,
+                Key=object_key,
+                Body=encoded,
+                ContentType="application/vnd.smcp.capsule",
+                ServerSideEncryption="AES256",
+                Metadata={"sha256": digest, "verified": "true"},
+            )
+            completed = connection.execute(
+                """
+                UPDATE capsules
+                SET status = 'COMPLETED', actual_bytes = %s, object_key = %s,
+                    sha256 = %s, merkle_root = %s, format_major = 1,
+                    format_minor = 0, completed_at = now(), error_code = NULL
+                WHERE id = %s AND tenant_subject = %s AND status = 'VERIFYING'
+                RETURNING project_id
+                """,
+                (
+                    len(encoded),
+                    object_key,
+                    bytes.fromhex(digest),
+                    bytes.fromhex(verify_report["merkle_root"]),
+                    capsule_id,
+                    tenant_subject,
+                ),
+            ).fetchone()
+            if not completed:
+                connection.rollback()
+                raise RuntimeError("capsule state changed before completion")
+            for ordinal, (selection, artifact, payload) in enumerate(payloads):
+                connection.execute(
+                    """
+                    INSERT INTO capsule_entries (
+                      tenant_subject, capsule_id, ordinal, artifact_id,
+                      candidate_id, utility, encoded_bytes
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        tenant_subject,
+                        capsule_id,
+                        ordinal,
+                        artifact["artifact_id"],
+                        artifact["candidate_id"],
+                        int(selection["utility"]),
+                        len(payload),
+                    ),
+                )
+            connection.execute(
+                """
+                INSERT INTO audit_events (
+                  tenant_subject, project_id, actor_subject, action, resource_type,
+                  resource_id, request_id, outcome, metadata
+                ) VALUES (%s, %s, 'compression-worker', 'capsule.completed',
+                          'capsule', %s, %s, 'success', %s)
+                """,
+                (
+                    tenant_subject,
+                    completed["project_id"],
+                    capsule_id,
+                    f"worker:{capsule_id}",
+                    json.dumps(
+                        {
+                            "actual_bytes": len(encoded),
+                            "sha256": digest,
+                            "entry_count": len(payloads),
+                        },
+                        sort_keys=True,
+                    ),
+                ),
+            )
+            connection.commit()
+
+    @staticmethod
+    def _write_capsule_sections(
+        root: Path,
+        capsule_id: str,
+        budget_bytes: int,
+        payloads: list[tuple[dict[str, Any], dict[str, Any], bytes]],
+    ) -> list[tuple[str, Path]]:
+        root.mkdir(parents=True, exist_ok=True)
+        codecs = sorted(
+            {(row[1]["codec_id"], row[1]["codec_version"]) for row in payloads}
+        )
+        registry = bytearray(CompressionWorker._varint(len(codecs)))
+        for codec_id, version in codecs:
+            registry.extend(CompressionWorker._length_prefixed(codec_id.encode()))
+            registry.extend(CompressionWorker._length_prefixed(version.encode()))
+
+        kind_names = {
+            "TEXT": "text",
+            "IMAGE": "image",
+            "AUDIO": "audio",
+            "VIDEO": "video",
+        }
+        kind_codes = {"TEXT": 1, "IMAGE": 2, "AUDIO": 3, "VIDEO": 4}
+        streams: dict[str, bytearray] = {}
+        index_records: list[bytes] = []
+        manifest = bytearray(UUID(capsule_id).bytes)
+        manifest.extend(struct.pack("<Q", budget_bytes))
+        for selection, artifact, payload in payloads:
+            input_type = str(artifact["input_type"])
+            stream = streams.setdefault(input_type, bytearray())
+            prefix = CompressionWorker._varint(len(payload))
+            offset = len(stream) + len(prefix)
+            stream.extend(prefix)
+            stream.extend(payload)
+            record = bytearray(UUID(str(artifact["job_id"])).bytes)
+            record.extend(UUID(str(artifact["candidate_id"])).bytes)
+            record.append(kind_codes[input_type])
+            record.extend(CompressionWorker._varint(offset))
+            record.extend(CompressionWorker._varint(len(payload)))
+            record.extend(hashlib.sha256(payload).digest())
+            index_records.append(bytes(record))
+            manifest.extend(UUID(str(artifact["artifact_id"])).bytes)
+            manifest.extend(UUID(str(artifact["candidate_id"])).bytes)
+            manifest.extend(struct.pack("<q", int(selection["utility"])))
+            manifest.extend(hashlib.sha256(payload).digest())
+
+        index = bytearray(CompressionWorker._varint(len(index_records)))
+        for record_bytes in index_records:
+            index.extend(record_bytes)
+        section_payloads: list[tuple[str, bytes]] = [("codec-registry", bytes(registry))]
+        for input_type in ("TEXT", "IMAGE", "AUDIO", "VIDEO"):
+            if input_type in streams:
+                section_payloads.append((kind_names[input_type], bytes(streams[input_type])))
+        section_payloads.extend(
+            (("index", bytes(index)), ("manifest-digest", hashlib.sha256(manifest).digest()))
+        )
+        result: list[tuple[str, Path]] = []
+        for ordinal, (kind, payload) in enumerate(section_payloads):
+            path = root / f"{ordinal:02d}-{kind}.bin"
+            path.write_bytes(payload)
+            result.append((kind, path))
+        return result
+
+    @staticmethod
+    def _varint(value: int) -> bytes:
+        if value < 0:
+            raise ValueError("varint cannot encode a negative value")
+        output = bytearray()
+        while value >= 0x80:
+            output.append((value & 0x7F) | 0x80)
+            value >>= 7
+        output.append(value)
+        return bytes(output)
+
+    @staticmethod
+    def _length_prefixed(value: bytes) -> bytes:
+        return CompressionWorker._varint(len(value)) + value
 
     def process_decompression(self, decompression_id: str, tenant_subject: str) -> None:
         with psycopg.connect(self.settings.database_url, row_factory=dict_row) as connection:
@@ -603,7 +902,7 @@ class CompressionWorker:
                     """,
                     (code, job_id, tenant_subject),
                 )
-            else:
+            elif stream == DECOMPRESSION_STREAM:
                 connection.execute(
                     """
                     UPDATE decompression_jobs
@@ -613,3 +912,14 @@ class CompressionWorker:
                     """,
                     (code, job_id, tenant_subject),
                 )
+            elif stream == CAPSULE_STREAM:
+                connection.execute(
+                    """
+                    UPDATE capsules
+                    SET status = 'FAILED_TERMINAL', error_code = %s, completed_at = now()
+                    WHERE id = %s AND tenant_subject = %s
+                      AND status NOT IN ('COMPLETED', 'FAILED_TERMINAL')
+                    """,
+                    (code, job_id, tenant_subject),
+                )
+            connection.commit()

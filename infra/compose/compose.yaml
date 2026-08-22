@@ -58,6 +58,9 @@ services:
     environment:
       MINIO_ROOT_USER: smcp-local
       MINIO_ROOT_PASSWORD: smcp-local-change-me
+      # Local-only static KMS key so SSE-S3 (AES256) writes exercise the
+      # production encryption contract. Production must use a managed KMS.
+      MINIO_KMS_SECRET_KEY: smcp-local:MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI=
     volumes:
       - minio-data:/data
     ports:

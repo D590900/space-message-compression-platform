@@ -25,7 +25,7 @@ paths:
       security: []
       operationId: live
       responses:
-        '200': { description: Process is alive }
+        "200": { description: Process is alive }
   /health/ready:
     get:
       summary: Check dependency readiness
@@ -33,15 +33,15 @@ paths:
       security: []
       operationId: ready
       responses:
-        '200': { description: Dependencies are ready }
-        '503': { $ref: '#/components/responses/Problem' }
+        "200": { description: Dependencies are ready }
+        "503": { $ref: "#/components/responses/Problem" }
   /v1/projects:
     post:
       summary: Create a project for the active organization
       tags: [Projects]
       operationId: createProject
       x-required-scope: projects:create
-      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
       requestBody:
         required: true
         content:
@@ -53,10 +53,10 @@ paths:
               properties:
                 name: { type: string, minLength: 1, maxLength: 120 }
       responses:
-        '201': { description: Project created }
-        '400': { $ref: '#/components/responses/Problem' }
-        '401': { $ref: '#/components/responses/Problem' }
-        '403': { $ref: '#/components/responses/Problem' }
+        "201": { description: Project created }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
   /v1/api-keys:
     get:
       summary: List API key metadata
@@ -64,8 +64,8 @@ paths:
       operationId: listApiKeys
       x-dashboard-session-only: true
       responses:
-        '200': { description: Non-secret API-key metadata }
-        '401': { $ref: '#/components/responses/Problem' }
+        "200": { description: Non-secret API-key metadata }
+        "401": { $ref: "#/components/responses/Problem" }
     post:
       summary: Create a scoped API key
       tags: [API keys]
@@ -75,12 +75,12 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/ApiKeyCreate' }
+            schema: { $ref: "#/components/schemas/ApiKeyCreate" }
       responses:
-        '201':
+        "201":
           description: Secret returned exactly once
-        '401': { $ref: '#/components/responses/Problem' }
-        '403': { $ref: '#/components/responses/Problem' }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
   /v1/api-keys/{id}/rotate:
     post:
       summary: Rotate an API key
@@ -88,61 +88,61 @@ paths:
       operationId: rotateApiKey
       x-dashboard-session-only: true
       parameters:
-        - $ref: '#/components/parameters/ResourceId'
-        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: "#/components/parameters/ResourceId"
+        - $ref: "#/components/parameters/IdempotencyKey"
       responses:
-        '201': { description: Replacement secret returned exactly once }
-        '404': { $ref: '#/components/responses/Problem' }
+        "201": { description: Replacement secret returned exactly once }
+        "404": { $ref: "#/components/responses/Problem" }
   /v1/api-keys/{id}:
     delete:
       summary: Revoke an API key
       tags: [API keys]
       operationId: revokeApiKey
       x-dashboard-session-only: true
-      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      parameters: [{ $ref: "#/components/parameters/ResourceId" }]
       responses:
-        '204': { description: Revoked }
-        '404': { $ref: '#/components/responses/Problem' }
+        "204": { description: Revoked }
+        "404": { $ref: "#/components/responses/Problem" }
   /v1/uploads/presign:
     post:
       summary: Create a direct upload URL
       tags: [Uploads]
       operationId: presignUpload
       x-required-scope: jobs:create
-      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/PresignUpload' }
+            schema: { $ref: "#/components/schemas/PresignUpload" }
       responses:
-        '201': { description: Short-lived direct upload URL }
-        '413': { $ref: '#/components/responses/Problem' }
+        "201": { description: Short-lived direct upload URL }
+        "413": { $ref: "#/components/responses/Problem" }
   /v1/compressions:
     post:
       summary: Create a compression job
       tags: [Compressions]
       operationId: createCompression
       x-required-scope: jobs:create
-      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/CompressionCreate' }
+            schema: { $ref: "#/components/schemas/CompressionCreate" }
       responses:
-        '202': { description: Job accepted }
-        '409': { $ref: '#/components/responses/Problem' }
+        "202": { description: Job accepted }
+        "409": { $ref: "#/components/responses/Problem" }
   /v1/compressions/{id}:
     get:
       summary: Get a compression job
       tags: [Compressions]
       operationId: getCompression
       x-required-scope: jobs:read
-      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      parameters: [{ $ref: "#/components/parameters/ResourceId" }]
       responses:
-        '200': { description: Job state and selected candidate }
-        '404': { $ref: '#/components/responses/Problem' }
+        "200": { description: Job state and selected candidate }
+        "404": { $ref: "#/components/responses/Problem" }
   /v1/compressions/{id}/cancel:
     post:
       summary: Cancel a compression job
@@ -150,119 +150,133 @@ paths:
       operationId: cancelCompression
       x-required-scope: jobs:cancel
       parameters:
-        - $ref: '#/components/parameters/ResourceId'
-        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: "#/components/parameters/ResourceId"
+        - $ref: "#/components/parameters/IdempotencyKey"
       responses:
-        '202': { description: Cancellation requested }
-        '409': { $ref: '#/components/responses/Problem' }
+        "202": { description: Cancellation requested }
+        "409": { $ref: "#/components/responses/Problem" }
   /v1/compressions/{id}/candidates:
     get:
       summary: List Pareto-efficient candidates
       tags: [Compressions]
       operationId: listCandidates
       x-required-scope: jobs:read
-      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      parameters: [{ $ref: "#/components/parameters/ResourceId" }]
       responses:
-        '200': { description: Pareto candidates and quality reports }
+        "200": { description: Pareto candidates and quality reports }
   /v1/artifacts/{id}/download:
     get:
       summary: Create an artifact download URL
       tags: [Compressions]
       operationId: downloadArtifact
       x-required-scope: artifacts:read
-      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      parameters: [{ $ref: "#/components/parameters/ResourceId" }]
       responses:
-        '200': { description: Short-lived signed download URL }
-        '404': { $ref: '#/components/responses/Problem' }
+        "200": { description: Short-lived signed download URL }
+        "404": { $ref: "#/components/responses/Problem" }
   /v1/decompressions:
     post:
       summary: Create a decompression job
       tags: [Decompressions]
       operationId: createDecompression
       x-required-scope: decompressions:create
-      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DecompressionCreate" }
       responses:
-        '202': { description: Decompression accepted }
+        "202": { description: Decompression accepted }
   /v1/decompressions/{id}:
     get:
       summary: Get a decompression job
       tags: [Decompressions]
       operationId: getDecompression
       x-required-scope: artifacts:read
-      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      parameters: [{ $ref: "#/components/parameters/ResourceId" }]
       responses:
-        '200': { description: Decompression state and verification report }
+        "200": { description: Decompression state and verification report }
   /v1/capsule-plans:
     post:
       summary: Plan a capsule within a strict budget
       tags: [Capsules]
       operationId: createCapsulePlan
       x-required-scope: capsules:plan
-      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/CapsulePlanCreate' }
+            schema: { $ref: "#/components/schemas/CapsulePlanCreate" }
       responses:
-        '201': { description: Deterministic plan and explanation }
-        '422': { $ref: '#/components/responses/Problem' }
+        "201": { description: Deterministic plan and explanation }
+        "422": { $ref: "#/components/responses/Problem" }
   /v1/capsule-plans/{id}:
     get:
       summary: Get a capsule plan
       tags: [Capsules]
       operationId: getCapsulePlan
       x-required-scope: capsules:read
-      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      parameters: [{ $ref: "#/components/parameters/ResourceId" }]
       responses:
-        '200': { description: Plan }
+        "200": { description: Plan }
   /v1/capsules:
     post:
-      summary: Build and verify a capsule
+      summary: Queue a deterministic capsule build and verification
       tags: [Capsules]
       operationId: createCapsule
       x-required-scope: capsules:create
-      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CapsuleCreate" }
       responses:
-        '201': { description: Built and verified capsule }
-        '422': { $ref: '#/components/responses/Problem' }
+        "202": { description: Capsule build accepted }
+        "422": { $ref: "#/components/responses/Problem" }
   /v1/capsules/{id}:
     get:
       summary: Get capsule metadata
       tags: [Capsules]
       operationId: getCapsule
       x-required-scope: capsules:read
-      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      parameters: [{ $ref: "#/components/parameters/ResourceId" }]
       responses:
-        '200': { description: Capsule metadata }
+        "200": { description: Capsule metadata }
   /v1/capsules/{id}/manifest:
     get:
       summary: Get a capsule reconstruction manifest
       tags: [Capsules]
       operationId: getCapsuleManifest
       x-required-scope: capsules:read
-      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      parameters: [{ $ref: "#/components/parameters/ResourceId" }]
       responses:
-        '200': { description: Verifiable reconstruction manifest }
+        "200": { description: Verifiable reconstruction manifest }
   /v1/capsules/{id}/download:
     get:
       summary: Create a capsule download URL
       tags: [Capsules]
       operationId: downloadCapsule
       x-required-scope: capsules:read
-      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      parameters: [{ $ref: "#/components/parameters/ResourceId" }]
       responses:
-        '200': { description: Short-lived signed download URL }
+        "200": { description: Short-lived signed download URL }
   /v1/capsules/verify:
     post:
       summary: Verify capsule integrity and budget
       tags: [Capsules]
       operationId: verifyCapsule
       x-required-scope: capsules:read
-      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CapsuleVerify" }
       responses:
-        '200': { description: Integrity and budget report }
-        '422': { $ref: '#/components/responses/Problem' }
+        "200": { description: Integrity and budget report }
+        "422": { $ref: "#/components/responses/Problem" }
   /v1/codecs:
     get:
       summary: List codec capabilities
@@ -270,7 +284,7 @@ paths:
       operationId: listCodecs
       x-required-scope: codecs:read
       responses:
-        '200':
+        "200":
           description: Enabled and explicitly disabled capabilities
           content:
             application/json:
@@ -281,7 +295,7 @@ paths:
                   total_count: { type: integer, minimum: 0 }
                   data:
                     type: array
-                    items: { $ref: '#/components/schemas/CodecCapability' }
+                    items: { $ref: "#/components/schemas/CodecCapability" }
   /v1/models:
     get:
       summary: List model manifests
@@ -289,7 +303,7 @@ paths:
       operationId: listModels
       x-required-scope: codecs:read
       responses:
-        '200':
+        "200":
           description: Versioned model manifests
           content:
             application/json:
@@ -300,7 +314,7 @@ paths:
                   total_count: { type: integer, minimum: 0 }
                   data:
                     type: array
-                    items: { $ref: '#/components/schemas/ModelManifest' }
+                    items: { $ref: "#/components/schemas/ModelManifest" }
 components:
   securitySchemes:
     bearerAuth:
@@ -322,7 +336,7 @@ components:
       description: Problem Details error
       content:
         application/problem+json:
-          schema: { $ref: '#/components/schemas/Problem' }
+          schema: { $ref: "#/components/schemas/Problem" }
   schemas:
     Problem:
       type: object
@@ -344,33 +358,69 @@ components:
           type: array
           minItems: 1
           uniqueItems: true
-          items: { $ref: '#/components/schemas/Scope' }
+          items: { $ref: "#/components/schemas/Scope" }
         expires_at: { type: string, format: date-time }
     Scope:
       type: string
-      enum: [jobs:create, jobs:read, jobs:cancel, artifacts:read, decompressions:create, capsules:plan, capsules:create, capsules:read, codecs:read, webhooks:manage, admin:benchmarks, admin:codecs]
+      enum:
+        [
+          jobs:create,
+          jobs:read,
+          jobs:cancel,
+          artifacts:read,
+          decompressions:create,
+          capsules:plan,
+          capsules:create,
+          capsules:read,
+          codecs:read,
+          webhooks:manage,
+          admin:benchmarks,
+          admin:codecs,
+        ]
     CodecCapability:
       type: object
-      required: [id, version, content_type, implementation_sha256, deterministic, enabled, capability]
+      required:
+        [
+          id,
+          version,
+          content_type,
+          implementation_sha256,
+          deterministic,
+          enabled,
+          capability,
+        ]
       properties:
         id: { type: string }
         version: { type: string }
         content_type: { type: string, enum: [TEXT, IMAGE, AUDIO, VIDEO] }
-        implementation_sha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+        implementation_sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
         deterministic: { type: boolean }
         enabled: { type: boolean }
-        disabled_reason: { type: [string, 'null'] }
+        disabled_reason: { type: [string, "null"] }
         capability: { type: object, additionalProperties: true }
     ModelManifest:
       type: object
-      required: [id, version, source_uri, code_commit, weights_sha256, config_sha256, license_code, license_weights, input_contract, decoder_image_digest, enabled]
+      required:
+        [
+          id,
+          version,
+          source_uri,
+          code_commit,
+          weights_sha256,
+          config_sha256,
+          license_code,
+          license_weights,
+          input_contract,
+          decoder_image_digest,
+          enabled,
+        ]
       properties:
         id: { type: string }
         version: { type: string }
         source_uri: { type: string, format: uri }
         code_commit: { type: string }
-        weights_sha256: { type: string, pattern: '^[a-f0-9]{64}$' }
-        config_sha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+        weights_sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+        config_sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
         license_code: { type: string }
         license_weights: { type: string }
         input_contract: { type: string }
@@ -383,9 +433,23 @@ components:
       properties:
         project_id: { type: string, format: uuid }
         filename: { type: string, minLength: 1, maxLength: 255 }
-        content_type: { type: string, enum: [text/plain, image/avif, image/jpeg, image/png, audio/ogg, audio/wav, video/mp4, video/webm] }
+        content_type:
+          {
+            type: string,
+            enum:
+              [
+                text/plain,
+                image/avif,
+                image/jpeg,
+                image/png,
+                audio/ogg,
+                audio/wav,
+                video/mp4,
+                video/webm,
+              ],
+          }
         bytes: { type: integer, minimum: 1, maximum: 1073741824 }
-        sha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+        sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
     CompressionCreate:
       type: object
       additionalProperties: false
@@ -396,21 +460,46 @@ components:
         input_type: { type: string, enum: [TEXT, IMAGE, AUDIO, VIDEO] }
         profile: { type: string, enum: [faithful, ultra, semantic] }
         target_bytes: { type: integer, minimum: 1 }
+    DecompressionCreate:
+      type: object
+      additionalProperties: false
+      required: [project_id, artifact_id]
+      properties:
+        project_id: { type: string, format: uuid }
+        artifact_id: { type: string, format: uuid }
     CapsulePlanCreate:
       type: object
       additionalProperties: false
       required: [project_id, items]
       properties:
         project_id: { type: string, format: uuid }
-        budget_bytes: { type: integer, minimum: 1, default: 2000000 }
-        ecc_percent: { type: number, minimum: 0, maximum: 50, default: 0 }
+        budget_bytes:
+          { type: integer, minimum: 1, maximum: 1073741824, default: 2000000 }
+        ecc_percent: { type: integer, minimum: 0, maximum: 50, default: 0 }
         items:
           type: array
           minItems: 1
+          maxItems: 10000
           items:
             type: object
+            additionalProperties: false
             required: [job_id, required, utility]
             properties:
               job_id: { type: string, format: uuid }
               required: { type: boolean }
-              utility: { type: integer }
+              utility: { type: integer, minimum: 0, maximum: 1000000 }
+    CapsuleCreate:
+      type: object
+      additionalProperties: false
+      required: [project_id, plan_id]
+      properties:
+        project_id: { type: string, format: uuid }
+        plan_id: { type: string, format: uuid }
+        pad_to_budget: { type: boolean, default: false }
+    CapsuleVerify:
+      type: object
+      additionalProperties: false
+      required: [project_id, capsule_id]
+      properties:
+        project_id: { type: string, format: uuid }
+        capsule_id: { type: string, format: uuid }
