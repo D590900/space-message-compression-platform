@@ -24,7 +24,7 @@ Valkey is transport, not the system of record. PostgreSQL remains authoritative 
 
 ## Secrets and configuration
 
-Inject configuration through the platform secret manager; never bake it into an image or manifest. At minimum set real values for Clerk, database, Valkey, S3, webhook encryption and metrics authentication. Generate `WEBHOOK_SECRET_ENCRYPTION_KEY` as exactly 32 random bytes encoded with Base64 and rotate it through a decrypt/re-encrypt migration, not an in-place replacement.
+Inject configuration through the platform secret manager; never bake it into an image or manifest. At minimum set real values for Clerk, database, Valkey, S3, identifier HMAC, webhook encryption and metrics authentication. Generate `WEBHOOK_SECRET_ENCRYPTION_KEY` as exactly 32 random bytes encoded with Base64 and rotate it through a decrypt/re-encrypt migration, not an in-place replacement. Generate `IDENTIFIER_HMAC_SECRET` independently with at least 256 bits of entropy and preserve it across deploys.
 
 Use separate identities for migrations, API and worker where the platform supports it. Restrict the worker and API to the private database/cache/storage networks. Do not expose worker port 8000 publicly. The complete variable contract is in [`configuration.md`](configuration.md).
 

@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 
 import type {
   ContentType,
@@ -212,13 +212,23 @@ export type ProjectUsageRecord = {
 export class Database {
   private readonly sql;
 
-  public constructor(databaseUrl: string) {
+  public constructor(
+    databaseUrl: string,
+    private readonly identifierHmacSecret: string,
+  ) {
     this.sql = postgres(databaseUrl, {
       max: 10,
       idle_timeout: 20,
       connect_timeout: 10,
       transform: { undefined: null },
     });
+  }
+
+  private fingerprint(input: unknown): Buffer {
+    return createHmac("sha256", this.identifierHmacSecret)
+      .update("idempotency\0")
+      .update(JSON.stringify(input))
+      .digest();
   }
 
   public async close(): Promise<void> {
@@ -295,9 +305,7 @@ export class Database {
     solver: string,
     report: Record<string, unknown>,
   ): Promise<{ plan: CapsulePlanRecord; created: boolean }> {
-    const fingerprint = createHash("sha256")
-      .update(JSON.stringify(input))
-      .digest();
+    const fingerprint = this.fingerprint(input);
     return this.sql.begin(async (transaction) => {
       const previous = await transaction<CapsulePlanRecord[]>`
         SELECT id, tenant_subject, project_id, budget_bytes, ecc_percent,
@@ -376,9 +384,7 @@ export class Database {
     idempotencyKey: string,
     input: CreateCapsuleInput,
   ): Promise<{ capsule: CapsuleRecord; created: boolean }> {
-    const fingerprint = createHash("sha256")
-      .update(JSON.stringify(input))
-      .digest();
+    const fingerprint = this.fingerprint(input);
     return this.sql.begin(async (transaction) => {
       const previous = await transaction<CapsuleRecord[]>`
         SELECT id, tenant_subject, project_id, plan_id, budget_bytes,
@@ -541,9 +547,7 @@ export class Database {
     idempotencyKey: string,
     input: CreateProjectInput,
   ): Promise<{ project: ProjectRecord; created: boolean }> {
-    const fingerprint = createHash("sha256")
-      .update(JSON.stringify(input))
-      .digest();
+    const fingerprint = this.fingerprint(input);
     return this.sql.begin(async (transaction) => {
       const previous = await transaction<ProjectRecord[]>`
         SELECT id, tenant_subject, name, created_at
@@ -599,9 +603,7 @@ export class Database {
     expiresAt: Date,
   ): Promise<{ source: SourceObjectRecord; created: boolean }> {
     await this.assertProject(tenantSubject, input.project_id);
-    const fingerprint = createHash("sha256")
-      .update(JSON.stringify(input))
-      .digest();
+    const fingerprint = this.fingerprint(input);
     return this.sql.begin(async (transaction) => {
       const previous = await transaction<SourceObjectRecord[]>`
         SELECT id, tenant_subject, project_id, object_key, declared_mime,
@@ -811,9 +813,7 @@ export class Database {
     idempotencyKey: string,
     input: unknown,
   ): Promise<ExternalMutationClaim> {
-    const fingerprint = createHash("sha256")
-      .update(JSON.stringify(input))
-      .digest();
+    const fingerprint = this.fingerprint(input);
     return this.sql.begin(async (transaction) => {
       const operationId = randomUUID();
       const inserted = await transaction<{ resource_id: string }[]>`
@@ -1052,9 +1052,7 @@ export class Database {
     idempotencyKey: string,
     input: CreateCompressionInput,
   ): Promise<{ job: CompressionJobRecord; created: boolean }> {
-    const fingerprint = createHash("sha256")
-      .update(JSON.stringify(input))
-      .digest();
+    const fingerprint = this.fingerprint(input);
 
     return this.sql.begin(async (transaction) => {
       const previous = await transaction<CompressionJobRecord[]>`
@@ -1248,9 +1246,7 @@ export class Database {
     idempotencyKey: string,
     input: CreateDecompressionInput,
   ): Promise<{ job: DecompressionJobRecord; created: boolean }> {
-    const fingerprint = createHash("sha256")
-      .update(JSON.stringify(input))
-      .digest();
+    const fingerprint = this.fingerprint(input);
     return this.sql.begin(async (transaction) => {
       const previous = await transaction<DecompressionJobRecord[]>`
         SELECT id, tenant_subject, project_id, artifact_id, status, output_object_key,
@@ -1411,9 +1407,7 @@ export class Database {
     secretCiphertext: Buffer,
   ): Promise<{ endpoint: WebhookEndpointRecord; created: boolean }> {
     await this.assertProject(tenantSubject, input.project_id);
-    const fingerprint = createHash("sha256")
-      .update(JSON.stringify(input))
-      .digest();
+    const fingerprint = this.fingerprint(input);
     return this.sql.begin(async (transaction) => {
       const previous = await transaction<WebhookEndpointRecord[]>`
         SELECT id, tenant_subject, project_id, url, event_types, enabled,

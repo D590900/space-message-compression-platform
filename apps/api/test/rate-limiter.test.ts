@@ -28,7 +28,13 @@ describe("CostRateLimiter", () => {
       eval: evalScript,
       quit: () => Promise.resolve("OK"),
     } as unknown as Redis;
-    const limiter = new CostRateLimiter("redis://unused", 1_000, 120, redis);
+    const limiter = new CostRateLimiter(
+      "redis://unused",
+      1_000,
+      120,
+      "test-identifier-hmac-secret-32-bytes",
+      redis,
+    );
 
     await limiter.consume(
       "org_private",
@@ -51,7 +57,13 @@ describe("CostRateLimiter", () => {
       eval: () => Promise.resolve(0),
       quit: () => Promise.resolve("OK"),
     } as unknown as Redis;
-    const limiter = new CostRateLimiter("redis://unused", 1_000, 120, redis);
+    const limiter = new CostRateLimiter(
+      "redis://unused",
+      1_000,
+      120,
+      "test-identifier-hmac-secret-32-bytes",
+      redis,
+    );
 
     await expect(
       limiter.consume("org", "key", "POST", "/v1/capsules"),
