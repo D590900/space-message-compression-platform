@@ -211,7 +211,9 @@ def _write_csv(path: Path, attempts: list[dict[str, Any]]) -> None:
         "failure",
     ]
     with path.open("w", encoding="utf-8", newline="") as stream:
-        writer = csv.DictWriter(stream, fieldnames=fields, extrasaction="ignore")
+        writer = csv.DictWriter(
+            stream, fieldnames=fields, extrasaction="ignore", lineterminator="\n"
+        )
         writer.writeheader()
         for attempt in attempts:
             row = {**attempt}
@@ -265,9 +267,9 @@ def _write_markdown(path: Path, report: dict[str, Any]) -> None:
         "",
         "> This file is derived from `results.json`; target values are not copied into results.",
         "",
-        f"Commit: `{report['environment']['commit']}`  ",
-        f"Platform: `{report['environment']['platform']}`  ",
-        f"Generated (UTC): `{report['generated_at_utc']}`",
+        f"- Commit: `{report['environment']['commit']}`",
+        f"- Platform: `{report['environment']['platform']}`",
+        f"- Generated (UTC): `{report['generated_at_utc']}`",
         "",
         *_markdown_table(
             [
