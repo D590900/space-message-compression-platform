@@ -95,4 +95,27 @@ describe("SmcpClient", () => {
       "https://storage.example.com/download",
     );
   });
+
+  it("encodes bounded project collection queries", async () => {
+    const fetch = vi.fn(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ total_count: 0, data: [] })),
+      ),
+    );
+    const client = new SmcpClient({
+      baseUrl: "https://api.example.com",
+      apiKey: "smcp_secret",
+      fetch,
+    });
+
+    await client.compressions("project/unsafe", 25, 10);
+    await client.artifacts("project/unsafe");
+    await client.capsules("project/unsafe", 5, 2);
+
+    expect(fetch.mock.calls.map(([url]) => String(url))).toEqual([
+      "https://api.example.com/v1/compressions?project_id=project%2Funsafe&limit=25&offset=10",
+      "https://api.example.com/v1/artifacts?project_id=project%2Funsafe&limit=50&offset=0",
+      "https://api.example.com/v1/capsules?project_id=project%2Funsafe&limit=5&offset=2",
+    ]);
+  });
 });

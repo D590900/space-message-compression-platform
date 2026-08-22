@@ -57,6 +57,7 @@ from smcp_worker.observability import (
     QUEUE_DEPTH,
     WORKER_OOM,
 )
+from smcp_worker.quality_policy import apply_quality_policy
 from smcp_worker.settings import Settings
 
 LOGGER = logging.getLogger(__name__)
@@ -275,10 +276,12 @@ class CompressionWorker:
             job = connection.execute(
                 """
                 SELECT j.*, s.object_key, s.declared_mime, s.expected_bytes,
-                       s.sha256 AS expected_sha256
+                       s.sha256 AS expected_sha256, p.quality_policy
                 FROM compression_jobs j
                 JOIN source_objects s
                   ON s.id = j.source_object_id AND s.tenant_subject = j.tenant_subject
+                JOIN projects p
+                  ON p.id = j.project_id AND p.tenant_subject = j.tenant_subject
                 WHERE j.id = %s AND j.tenant_subject = %s
                 """,
                 (job_id, tenant_subject),
@@ -343,9 +346,22 @@ class CompressionWorker:
             source = SourceObject(source_bytes, job["declared_mime"], job["object_key"])
             self._transition(connection, job_id, tenant_subject, "PREPROCESSING", "ENCODING")
             started = time.perf_counter_ns()
-            candidates = self._generate_candidates(input_type, source, Profile(job["profile"]))
+            generated_candidates = self._generate_candidates(
+                input_type, source, Profile(job["profile"])
+            )
+            candidates = [
+                (candidate, updated_report)
+                for candidate, report in generated_candidates
+                if (
+                    updated_report := apply_quality_policy(
+                        input_type, report, job["quality_policy"]
+                    )
+                ).quality_gate_passed
+            ]
+            rejected_count = len(generated_candidates) - len(candidates)
+            if rejected_count:
+                QUALITY_GATE_FAILURES.labels(content_type=input_type).inc(rejected_count)
             if not candidates:
-                QUALITY_GATE_FAILURES.labels(content_type=input_type).inc()
                 self._terminal_failure(connection, job, "NO_QUALITY_GATED_CANDIDATE")
                 return
             encode_duration_ms = max(0, (time.perf_counter_ns() - started) // 1_000_000)

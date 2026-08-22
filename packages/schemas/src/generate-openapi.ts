@@ -15,6 +15,7 @@ import {
   presignUploadSchema,
   problemSchema,
   rotateApiKeySchema,
+  updateProjectSettingsSchema,
   verifyCapsuleSchema,
 } from "./index.js";
 
@@ -37,6 +38,7 @@ const generatedSchemas: Record<string, ZodType> = {
   CapsuleVerify: verifyCapsuleSchema,
   Problem: problemSchema,
   ProjectCreate: createProjectSchema,
+  ProjectSettingsUpdate: updateProjectSettingsSchema,
 };
 
 type OpenApiDocument = {

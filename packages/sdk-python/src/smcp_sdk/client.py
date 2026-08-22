@@ -22,9 +22,7 @@ class SmcpProblem(RuntimeError):
         self.request_id = problem.get("request_id")
         self.body = body
         message = (
-            problem.get("detail")
-            or problem.get("title")
-            or f"SMCP request failed with {status}"
+            problem.get("detail") or problem.get("title") or f"SMCP request failed with {status}"
         )
         super().__init__(str(message))
 
@@ -59,13 +57,14 @@ class SmcpClient:
     ) -> dict[str, Any]:
         return self._request("POST", "v1/compressions", payload, idempotency_key)
 
+    def compressions(self, project_id: str, *, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+        return self._project_page("v1/compressions", project_id, limit, offset)
+
     def compression(self, resource_id: str) -> dict[str, Any]:
         return self._request("GET", f"v1/compressions/{quote(resource_id, safe='')}")
 
     def compression_candidates(self, resource_id: str) -> dict[str, Any]:
-        return self._request(
-            "GET", f"v1/compressions/{quote(resource_id, safe='')}/candidates"
-        )
+        return self._request("GET", f"v1/compressions/{quote(resource_id, safe='')}/candidates")
 
     def cancel_compression(
         self, resource_id: str, *, idempotency_key: str | None = None
@@ -77,9 +76,10 @@ class SmcpClient:
         )
 
     def artifact_download(self, resource_id: str) -> dict[str, Any]:
-        return self._request(
-            "GET", f"v1/artifacts/{quote(resource_id, safe='')}/download"
-        )
+        return self._request("GET", f"v1/artifacts/{quote(resource_id, safe='')}/download")
+
+    def artifacts(self, project_id: str, *, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+        return self._project_page("v1/artifacts", project_id, limit, offset)
 
     def create_decompression(
         self, payload: Mapping[str, object], *, idempotency_key: str | None = None
@@ -99,6 +99,9 @@ class SmcpClient:
     ) -> dict[str, Any]:
         return self._request("POST", "v1/capsules", payload, idempotency_key)
 
+    def capsules(self, project_id: str, *, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+        return self._project_page("v1/capsules", project_id, limit, offset)
+
     def capsule_plan(self, resource_id: str) -> dict[str, Any]:
         return self._request("GET", f"v1/capsule-plans/{quote(resource_id, safe='')}")
 
@@ -106,14 +109,10 @@ class SmcpClient:
         return self._request("GET", f"v1/capsules/{quote(resource_id, safe='')}")
 
     def capsule_manifest(self, resource_id: str) -> dict[str, Any]:
-        return self._request(
-            "GET", f"v1/capsules/{quote(resource_id, safe='')}/manifest"
-        )
+        return self._request("GET", f"v1/capsules/{quote(resource_id, safe='')}/manifest")
 
     def capsule_download(self, resource_id: str) -> dict[str, Any]:
-        return self._request(
-            "GET", f"v1/capsules/{quote(resource_id, safe='')}/download"
-        )
+        return self._request("GET", f"v1/capsules/{quote(resource_id, safe='')}/download")
 
     def upload_presigned(
         self,
@@ -125,14 +124,10 @@ class SmcpClient:
             "PUT", upload_url, required_headers, data, self.timeout_seconds
         )
         if not 200 <= status < 300:
-            raise RuntimeError(
-                f"presigned upload failed with {status}: {response[:200]!r}"
-            )
+            raise RuntimeError(f"presigned upload failed with {status}: {response[:200]!r}")
 
     def download_signed(self, download_url: str) -> bytes:
-        status, _, response = self.transport(
-            "GET", download_url, {}, None, self.timeout_seconds
-        )
+        status, _, response = self.transport("GET", download_url, {}, None, self.timeout_seconds)
         if not 200 <= status < 300:
             raise RuntimeError(f"signed download failed with {status}")
         return response
@@ -150,6 +145,10 @@ class SmcpClient:
     def webhooks(self, project_id: str) -> dict[str, Any]:
         query = urlencode({"project_id": project_id})
         return self._request("GET", f"v1/webhooks?{query}")
+
+    def _project_page(self, path: str, project_id: str, limit: int, offset: int) -> dict[str, Any]:
+        query = urlencode({"project_id": project_id, "limit": limit, "offset": offset})
+        return self._request("GET", f"{path}?{query}")
 
     def _request(
         self,
