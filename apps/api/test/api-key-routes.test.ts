@@ -217,4 +217,173 @@ describe("API-key lifecycle routes", () => {
     expect(create).not.toHaveBeenCalled();
     expect(complete).toHaveBeenCalledOnce();
   });
+
+  it("creates a rotation once with a durable operation marker", async () => {
+    const oldKey = key({ id: "apikey_old", secret: undefined });
+    const complete = vi.fn(() =>
+      Promise.resolve({
+        id: "rotation-1",
+        tenant_subject: "org_test",
+        old_key_id: oldKey.id,
+        new_key_id: "apikey_new",
+        revoke_at: new Date(Date.now() + 60_000),
+        attempt: 0,
+      }),
+    );
+    const database = {
+      claimExternalMutation: () =>
+        Promise.resolve({
+          state: "claimed",
+          operationId: "rotation-operation-1",
+        }),
+      apiKeyRotationExists: () => Promise.resolve(false),
+      completeExternalApiKeyRotation: complete,
+      close: () => Promise.resolve(),
+    } as unknown as Database;
+    const create = vi.fn((input) =>
+      Promise.resolve(
+        key({
+          id: "apikey_new",
+          claims: input.claims as Record<string, unknown>,
+        }),
+      ),
+    );
+    const clerk = {
+      authenticateSession: () =>
+        Promise.resolve({
+          kind: "session" as const,
+          tenantSubject: "org_test",
+          actorSubject: "user_test",
+        }),
+      getApiKey: () => Promise.resolve(oldKey),
+      listApiKeys: () => Promise.resolve({ data: [], totalCount: 0 }),
+      createApiKey: create,
+    } as unknown as ClerkGateway;
+    const { app } = await buildApp(config, dependencies(database, clerk));
+    apps.push(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/api-keys/apikey_old/rotate",
+      headers: { "idempotency-key": "stable-rotation-key" },
+      payload: { overlap_seconds: 60 },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toMatchObject({
+      id: "apikey_new",
+      secret: "smcp-secret",
+      rotation: { old_key_id: "apikey_old", revocation_pending: true },
+    });
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        claims: {
+          smcp_issued: true,
+          rotated_from: "apikey_old",
+          smcp_rotation_operation_id: "rotation-operation-1",
+        },
+      }),
+    );
+    expect(complete).toHaveBeenCalledOnce();
+  });
+
+  it("reconciles a crash-created rotation replacement without duplication", async () => {
+    const oldKey = key({ id: "apikey_old", secret: undefined });
+    const recovered = key({
+      id: "apikey_new",
+      secret: undefined,
+      claims: {
+        smcp_issued: true,
+        rotated_from: oldKey.id,
+        smcp_rotation_operation_id: "rotation-operation-1",
+      },
+    });
+    const database = {
+      claimExternalMutation: () =>
+        Promise.resolve({
+          state: "claimed",
+          operationId: "rotation-operation-1",
+        }),
+      completeExternalApiKeyRotation: () =>
+        Promise.resolve({
+          id: "rotation-1",
+          tenant_subject: "org_test",
+          old_key_id: oldKey.id,
+          new_key_id: recovered.id,
+          revoke_at: new Date(Date.now() + 60_000),
+          attempt: 0,
+        }),
+      close: () => Promise.resolve(),
+    } as unknown as Database;
+    const create = vi.fn();
+    const clerk = {
+      authenticateSession: () =>
+        Promise.resolve({
+          kind: "session" as const,
+          tenantSubject: "org_test",
+          actorSubject: "user_test",
+        }),
+      getApiKey: () => Promise.resolve(oldKey),
+      listApiKeys: () => Promise.resolve({ data: [recovered], totalCount: 1 }),
+      createApiKey: create,
+      getApiKeySecret: () => Promise.resolve("recovered-rotation-secret"),
+    } as unknown as ClerkGateway;
+    const { app } = await buildApp(config, dependencies(database, clerk));
+    apps.push(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/api-keys/apikey_old/rotate",
+      headers: { "idempotency-key": "stable-rotation-key" },
+      payload: { overlap_seconds: 60 },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toMatchObject({
+      id: "apikey_new",
+      secret: "recovered-rotation-secret",
+    });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("does not redisplay a completed rotation secret", async () => {
+    const oldKey = key({ id: "apikey_old", revoked: true, secret: undefined });
+    const database = {
+      claimExternalMutation: () =>
+        Promise.resolve({
+          state: "completed",
+          operationId: "rotation-operation-1",
+          externalResourceId: "apikey_new",
+          responseStatus: 201,
+          responseBody: {},
+        }),
+      close: () => Promise.resolve(),
+    } as unknown as Database;
+    const create = vi.fn();
+    const clerk = {
+      authenticateSession: () =>
+        Promise.resolve({
+          kind: "session" as const,
+          tenantSubject: "org_test",
+          actorSubject: "user_test",
+        }),
+      getApiKey: () => Promise.resolve(oldKey),
+      createApiKey: create,
+    } as unknown as ClerkGateway;
+    const { app } = await buildApp(config, dependencies(database, clerk));
+    apps.push(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/api-keys/apikey_old/rotate",
+      headers: { "idempotency-key": "stable-rotation-key" },
+      payload: { overlap_seconds: 0 },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      type: "urn:smcp:problem:rotation-already-created",
+    });
+    expect(create).not.toHaveBeenCalled();
+  });
 });

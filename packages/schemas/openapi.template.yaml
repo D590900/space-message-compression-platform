@@ -97,7 +97,7 @@ paths:
       operationId: rotateApiKey
       x-dashboard-session-only: true
       parameters:
-        - $ref: "#/components/parameters/ResourceId"
+        - $ref: "#/components/parameters/ApiKeyId"
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: false
@@ -117,7 +117,7 @@ paths:
       tags: [API keys]
       operationId: revokeApiKey
       x-dashboard-session-only: true
-      parameters: [{ $ref: "#/components/parameters/ResourceId" }]
+      parameters: [{ $ref: "#/components/parameters/ApiKeyId" }]
       responses:
         "204": { description: Revoked }
         "404": { $ref: "#/components/responses/Problem" }
@@ -383,6 +383,15 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    ApiKeyId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: ^[A-Za-z0-9_-]+$
     IdempotencyKey:
       name: Idempotency-Key
       in: header

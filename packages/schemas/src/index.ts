@@ -150,6 +150,13 @@ export const verifyCapsuleSchema = z.strictObject({
 });
 
 export const resourceIdParamsSchema = z.strictObject({ id: uuidSchema });
+export const apiKeyIdParamsSchema = z.strictObject({
+  id: z
+    .string()
+    .min(1)
+    .max(128)
+    .regex(/^[A-Za-z0-9_-]+$/),
+});
 
 export const idempotencyKeySchema = z
   .string()
