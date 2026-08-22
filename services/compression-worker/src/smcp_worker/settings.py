@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     worker_claim_batch: int = Field(default=10, ge=1, le=100)
     worker_max_attempts: int = Field(default=3, ge=1, le=20)
     max_upload_bytes: int = Field(default=1_073_741_824, gt=0)
+    max_image_pixels: int = Field(default=100_000_000, gt=0)
+    max_audio_seconds: float = Field(default=3_600, gt=0)
+    max_video_seconds: float = Field(default=1_800, gt=0)
+    max_video_pixels: int = Field(default=33_177_600, gt=0)
+    max_video_frames: int = Field(default=216_000, gt=0)
     # Container-internal health endpoint; Compose does not publish this port.
     worker_health_host: str = "0.0.0.0"  # noqa: S104
     worker_health_port: int = Field(default=8000, ge=1, le=65_535)

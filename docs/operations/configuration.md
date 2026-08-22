@@ -52,6 +52,8 @@ Optional neural adapters are disabled until an operator installs pinned dependen
 
 The production worker contains Brotli, Zstandard, libavif, JPEG XL, Opus and SVT-AV1/dav1d. FFmpeg 9.0.1 is built from the release tarball only after its signature and signing-key fingerprint are verified. The build uses `--disable-gpl --disable-network`; do not replace it with a distribution FFmpeg package without reviewing `ffmpeg -buildconf`, network protocol support and the resulting image license obligations.
 
+Before canonicalization or encoding, the worker probes decoded media under a 60-second probe timeout. `MAX_IMAGE_PIXELS`, `MAX_AUDIO_SECONDS`, `MAX_VIDEO_SECONDS`, `MAX_VIDEO_PIXELS` and `MAX_VIDEO_FRAMES` are hard admission ceilings; exceeding one produces a terminal, content-free error code. The defaults allow 100 megapixel still images, one hour of audio, and video up to 30 minutes, 8K pixels per frame and 216,000 frames. Lower them to match the deployed CPU/memory envelope.
+
 `GET /v1/codecs` requires `codecs:read` and returns both enabled baselines and disabled optional model families. Disabled entries include a reason and installation/manifest guidance. `GET /v1/models` returns only immutable manifests actually registered in PostgreSQL.
 
 Baseline media gates currently enforce:
