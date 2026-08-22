@@ -85,6 +85,11 @@ export const createCompressionSchema = z.strictObject({
   target_bytes: z.int().positive().optional(),
 });
 
+export const createDecompressionSchema = z.strictObject({
+  project_id: uuidSchema,
+  artifact_id: uuidSchema,
+});
+
 export const resourceIdParamsSchema = z.strictObject({ id: uuidSchema });
 
 export const idempotencyKeySchema = z
@@ -106,3 +111,6 @@ export type CreateProjectInput = z.infer<typeof createProjectSchema>;
 export type CreateApiKeyInput = z.infer<typeof createApiKeySchema>;
 export type PresignUploadInput = z.infer<typeof presignUploadSchema>;
 export type CreateCompressionInput = z.infer<typeof createCompressionSchema>;
+export type CreateDecompressionInput = z.infer<
+  typeof createDecompressionSchema
+>;
