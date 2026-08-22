@@ -33,6 +33,7 @@ RUN apt-get update \
       --disable-doc \
       --disable-ffplay \
       --disable-gpl \
+      --disable-network \
       --enable-libdav1d \
       --enable-libopus \
       --enable-libsvtav1 \

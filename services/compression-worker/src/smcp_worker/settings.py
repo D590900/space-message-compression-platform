@@ -1,4 +1,4 @@
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     worker_consumer_name: str = "worker-1"
     worker_group: str = "compression-workers"
     worker_block_ms: int = Field(default=5_000, ge=100, le=60_000)
+    worker_claim_idle_ms: int = Field(default=1_800_000, ge=10_000, le=86_400_000)
+    worker_claim_batch: int = Field(default=10, ge=1, le=100)
+    worker_max_attempts: int = Field(default=3, ge=1, le=20)
     max_upload_bytes: int = Field(default=1_073_741_824, gt=0)
     # Container-internal health endpoint; Compose does not publish this port.
     worker_health_host: str = "0.0.0.0"  # noqa: S104
@@ -23,3 +26,8 @@ class Settings(BaseSettings):
     environment: str = "development"
     otel_service_name: str = "smcp-compression-worker"
     otel_exporter_otlp_traces_endpoint: str | None = None
+
+    @field_validator("otel_exporter_otlp_traces_endpoint", mode="before")
+    @classmethod
+    def empty_optional_url_is_none(cls, value: object) -> object:
+        return None if value == "" else value

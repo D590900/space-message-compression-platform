@@ -43,6 +43,8 @@ Deploy backward-compatible schema additions before code that needs them. Destruc
 - Keep buckets private, require encrypted writes and use five-minute-or-shorter signed URLs unless a documented workflow requires otherwise.
 - Set CPU/memory/PID limits and autoscale workers from pending queue lag plus measured processing latency.
 
+The reference Compose topology applies explicit CPU, memory and PID ceilings to both application containers. Its worker claim-idle threshold is 30 minutes; tune `WORKER_CLAIM_IDLE_MS` above the deployment's longest allowed codec execution before scaling beyond one worker. Stale pending deliveries are reclaimed automatically and exhaust after `WORKER_MAX_ATTEMPTS`.
+
 ## Health, metrics and traces
 
 The API exposes `/health/live`, `/health/ready` and bearer-protected `/metrics`. The worker exposes the same health states and metrics on its internal port. Readiness depends on required service connectivity and worker stream-group initialization.

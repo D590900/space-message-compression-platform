@@ -6,9 +6,8 @@ The executable PostgreSQL schema lives in [`infra/migrations/0001_initial.sql`](
 
 `PENDING → VALIDATING → PREPROCESSING → ENCODING → MEASURING → SELECTING → PACKAGING → COMPLETED`
 
-Any active state may move to `FAILED_RETRYABLE`, `FAILED_TERMINAL` or `CANCELLED`. A retry uses an incremented attempt and a compare-and-set transition back to the recorded resume state. Terminal states cannot transition. Each successful state change inserts an `audit_events` row in the same transaction.
+Any active state may move to `FAILED_RETRYABLE`, `FAILED_TERMINAL` or, for compression, `CANCELLED`. Valkey consumer-group deliveries are acknowledged only after success or terminal exhaustion. A worker reclaims stale pending deliveries with `XAUTOCLAIM`; a retry resets the authoritative row to `PENDING`, and compression retries first remove tracked partial candidates and artifacts. Crash recovery increments the attempt counter, and repeated failures become `FAILED_TERMINAL` at `WORKER_MAX_ATTEMPTS`. Completed rows are idempotent, so a crash after the completion transaction but before acknowledgement does not duplicate completion events.
 
 ## Idempotency
 
 Mutating API requests store `(tenant_subject, route, idempotency_key, request_fingerprint)`. Reuse with the same fingerprint returns the stored response; reuse with different input returns conflict. Entries expire only after the documented retry horizon.
-

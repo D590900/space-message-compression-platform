@@ -146,25 +146,48 @@ class CompressionWorker:
         if on_ready is not None:
             on_ready()
         while True:
-            messages = cast(
-                list[tuple[str, list[tuple[str, dict[str, str]]]]],
-                self.redis.xreadgroup(
-                    self.settings.worker_group,
-                    self.settings.worker_consumer_name,
-                    {
-                        COMPRESSION_STREAM: ">",
-                        DECOMPRESSION_STREAM: ">",
-                        CAPSULE_STREAM: ">",
-                    },
-                    count=1,
-                    block=self.settings.worker_block_ms,
-                ),
-            )
+            messages = self._claim_stale_messages()
+            if not messages:
+                messages = cast(
+                    list[tuple[str, list[tuple[str, dict[str, str]]]]],
+                    self.redis.xreadgroup(
+                        self.settings.worker_group,
+                        self.settings.worker_consumer_name,
+                        {
+                            COMPRESSION_STREAM: ">",
+                            DECOMPRESSION_STREAM: ">",
+                            CAPSULE_STREAM: ">",
+                        },
+                        count=1,
+                        block=self.settings.worker_block_ms,
+                    ),
+                )
             for queue in (COMPRESSION_STREAM, DECOMPRESSION_STREAM, CAPSULE_STREAM):
                 QUEUE_DEPTH.labels(queue=queue).set(self._queue_backlog(queue))
             for stream, entries in messages:
                 for message_id, fields in entries:
                     self.process_message(stream, message_id, fields)
+
+    def _claim_stale_messages(
+        self,
+    ) -> list[tuple[str, list[tuple[str, dict[str, str]]]]]:
+        claimed: list[tuple[str, list[tuple[str, dict[str, str]]]]] = []
+        for stream in (COMPRESSION_STREAM, DECOMPRESSION_STREAM, CAPSULE_STREAM):
+            response = cast(
+                list[Any],
+                self.redis.xautoclaim(
+                    stream,
+                    self.settings.worker_group,
+                    self.settings.worker_consumer_name,
+                    self.settings.worker_claim_idle_ms,
+                    "0-0",
+                    count=self.settings.worker_claim_batch,
+                ),
+            )
+            entries = cast(list[tuple[str, dict[str, str]]], response[1])
+            if entries:
+                claimed.append((stream, entries))
+        return claimed
 
     def _queue_backlog(self, stream: str) -> float:
         groups = cast(list[dict[str, Any]], self.redis.xinfo_groups(stream))
@@ -189,6 +212,15 @@ class CompressionWorker:
         tenant_subject = fields.get("tenant_subject")
         if not job_id or not tenant_subject:
             LOGGER.error("rejecting malformed queue message", extra={"message_id": message_id})
+            self.redis.xack(stream, self.settings.worker_group, message_id)
+            return
+        try:
+            UUID(job_id)
+        except ValueError:
+            LOGGER.error(
+                "rejecting queue message with invalid job id",
+                extra={"message_id": message_id},
+            )
             self.redis.xack(stream, self.settings.worker_group, message_id)
             return
         job_type = {
@@ -225,8 +257,9 @@ class CompressionWorker:
                 JOBS_FAILED.labels(job_type=job_type).inc()
                 JOBS.labels(job_type=job_type, outcome="failed").inc()
                 LOGGER.exception("worker job failed", extra={"job_id": job_id, "stream": stream})
-                self._fail_job(stream, job_id, tenant_subject, "WORKER_FAILURE")
-                self.redis.xack(stream, self.settings.worker_group, message_id)
+                terminal = self._fail_job(stream, job_id, tenant_subject, "WORKER_FAILURE")
+                if terminal:
+                    self.redis.xack(stream, self.settings.worker_group, message_id)
             else:
                 JOBS.labels(job_type=job_type, outcome="processed").inc()
                 self.redis.xack(stream, self.settings.worker_group, message_id)
@@ -249,6 +282,10 @@ class CompressionWorker:
             if not job:
                 raise ValueError("job does not exist for tenant")
             if job["status"] in {"COMPLETED", "FAILED_TERMINAL", "CANCELLED"}:
+                return
+            if job["status"] != "PENDING" and not self._recover_compression_job(
+                connection, job
+            ):
                 return
             input_type = str(job["input_type"])
             self._transition(connection, job_id, tenant_subject, "PENDING", "VALIDATING")
@@ -478,8 +515,10 @@ class CompressionWorker:
                 raise ValueError("capsule does not exist for tenant")
             if capsule["status"] in {"COMPLETED", "FAILED_TERMINAL"}:
                 return
-            if capsule["status"] != "PENDING":
-                raise RuntimeError("capsule is not claimable")
+            if capsule["status"] != "PENDING" and not self._recover_simple_job(
+                connection, "capsules", capsule
+            ):
+                return
             claimed = connection.execute(
                 """
                 UPDATE capsules SET status = 'BUILDING'
@@ -787,8 +826,10 @@ class CompressionWorker:
                 raise ValueError("decompression job does not exist for tenant")
             if job["status"] in {"COMPLETED", "FAILED_TERMINAL"}:
                 return
-            if job["status"] != "PENDING":
-                raise RuntimeError("decompression job is not claimable")
+            if job["status"] != "PENDING" and not self._recover_simple_job(
+                connection, "decompression_jobs", job
+            ):
+                return
 
             updated = connection.execute(
                 """
@@ -1031,36 +1072,198 @@ class CompressionWorker:
         )
         connection.commit()
 
-    def _fail_job(self, stream: str, job_id: str, tenant_subject: str, code: str) -> None:
+    def _recover_compression_job(
+        self, connection: psycopg.Connection[Any], job: dict[str, Any]
+    ) -> bool:
+        """Reset a stale delivery to a clean, replayable compression attempt."""
+        crashed = job["status"] != "FAILED_RETRYABLE"
+        next_attempt = int(job["attempt"]) + int(crashed)
+        rows = connection.execute(
+            """
+            SELECT object_key FROM encoding_candidates
+            WHERE job_id = %s AND tenant_subject = %s
+            """,
+            (job["id"], job["tenant_subject"]),
+        ).fetchall()
+        self._delete_objects([str(row["object_key"]) for row in rows])
+        connection.execute(
+            """
+            UPDATE compression_jobs SET selected_candidate_id = NULL
+            WHERE id = %s AND tenant_subject = %s
+            """,
+            (job["id"], job["tenant_subject"]),
+        )
+        connection.execute(
+            "DELETE FROM artifacts WHERE job_id = %s AND tenant_subject = %s",
+            (job["id"], job["tenant_subject"]),
+        )
+        connection.execute(
+            "DELETE FROM encoding_candidates WHERE job_id = %s AND tenant_subject = %s",
+            (job["id"], job["tenant_subject"]),
+        )
+        if next_attempt >= self.settings.worker_max_attempts:
+            connection.execute(
+                """
+                UPDATE compression_jobs
+                SET status = 'FAILED_TERMINAL', attempt = %s,
+                    error_code = 'RETRY_EXHAUSTED', completed_at = now()
+                WHERE id = %s AND tenant_subject = %s
+                """,
+                (next_attempt, job["id"], job["tenant_subject"]),
+            )
+            connection.commit()
+            return False
+        connection.execute(
+            """
+            UPDATE compression_jobs
+            SET status = 'PENDING', attempt = %s, started_at = NULL,
+                completed_at = NULL, error_code = NULL, error_detail_redacted = NULL
+            WHERE id = %s AND tenant_subject = %s
+            """,
+            (next_attempt, job["id"], job["tenant_subject"]),
+        )
+        connection.commit()
+        return True
+
+    def _recover_simple_job(
+        self,
+        connection: psycopg.Connection[Any],
+        table: str,
+        job: dict[str, Any],
+    ) -> bool:
+        crashed = job["status"] != "FAILED_RETRYABLE"
+        next_attempt = int(job["attempt"]) + int(crashed)
+        queries = {
+            "capsules": (
+                """
+                UPDATE capsules
+                SET status = 'FAILED_TERMINAL', attempt = %s,
+                    error_code = 'RETRY_EXHAUSTED', completed_at = now()
+                WHERE id = %s AND tenant_subject = %s
+                """,
+                """
+                UPDATE capsules
+                SET status = 'PENDING', attempt = %s,
+                    error_code = NULL, completed_at = NULL
+                WHERE id = %s AND tenant_subject = %s
+                """,
+            ),
+            "decompression_jobs": (
+                """
+                UPDATE decompression_jobs
+                SET status = 'FAILED_TERMINAL', attempt = %s,
+                    error_code = 'RETRY_EXHAUSTED', completed_at = now()
+                WHERE id = %s AND tenant_subject = %s
+                """,
+                """
+                UPDATE decompression_jobs
+                SET status = 'PENDING', attempt = %s,
+                    error_code = NULL, completed_at = NULL
+                WHERE id = %s AND tenant_subject = %s
+                """,
+            ),
+        }
+        try:
+            terminal_query, retry_query = queries[table]
+        except KeyError as error:
+            raise ValueError("unsupported recovery table") from error
+        if next_attempt >= self.settings.worker_max_attempts:
+            connection.execute(
+                terminal_query,
+                (next_attempt, job["id"], job["tenant_subject"]),
+            )
+            connection.commit()
+            return False
+        connection.execute(
+            retry_query,
+            (next_attempt, job["id"], job["tenant_subject"]),
+        )
+        connection.commit()
+        return True
+
+    def _delete_objects(self, object_keys: list[str]) -> None:
+        for offset in range(0, len(object_keys), 1_000):
+            chunk = object_keys[offset : offset + 1_000]
+            if chunk:
+                self.s3.delete_objects(
+                    Bucket=self.settings.s3_bucket,
+                    Delete={"Objects": [{"Key": key} for key in chunk], "Quiet": True},
+                )
+
+    def _fail_job(self, stream: str, job_id: str, tenant_subject: str, code: str) -> bool:
         with psycopg.connect(self.settings.database_url) as connection:
             if stream == COMPRESSION_STREAM:
-                connection.execute(
+                row = connection.execute(
                     """
                     UPDATE compression_jobs
-                    SET status = 'FAILED_RETRYABLE', error_code = %s, attempt = attempt + 1
+                    SET status = (
+                          CASE WHEN attempt + 1 >= %s
+                               THEN 'FAILED_TERMINAL' ELSE 'FAILED_RETRYABLE' END
+                        )::job_status,
+                        error_code = CASE WHEN attempt + 1 >= %s
+                                          THEN 'RETRY_EXHAUSTED' ELSE %s END,
+                        completed_at = CASE WHEN attempt + 1 >= %s THEN now() ELSE NULL END,
+                        attempt = attempt + 1
                     WHERE id = %s AND tenant_subject = %s
                       AND status NOT IN ('COMPLETED', 'FAILED_TERMINAL', 'CANCELLED')
+                    RETURNING status
                     """,
-                    (code, job_id, tenant_subject),
-                )
+                    (
+                        self.settings.worker_max_attempts,
+                        self.settings.worker_max_attempts,
+                        code,
+                        self.settings.worker_max_attempts,
+                        job_id,
+                        tenant_subject,
+                    ),
+                ).fetchone()
             elif stream == DECOMPRESSION_STREAM:
-                connection.execute(
+                row = connection.execute(
                     """
                     UPDATE decompression_jobs
-                    SET status = 'FAILED_RETRYABLE', error_code = %s
+                    SET status = CASE WHEN attempt + 1 >= %s
+                                      THEN 'FAILED_TERMINAL' ELSE 'FAILED_RETRYABLE' END,
+                        error_code = CASE WHEN attempt + 1 >= %s
+                                          THEN 'RETRY_EXHAUSTED' ELSE %s END,
+                        completed_at = CASE WHEN attempt + 1 >= %s THEN now() ELSE NULL END,
+                        attempt = attempt + 1
                     WHERE id = %s AND tenant_subject = %s
                       AND status NOT IN ('COMPLETED', 'FAILED_TERMINAL')
+                    RETURNING status
                     """,
-                    (code, job_id, tenant_subject),
-                )
+                    (
+                        self.settings.worker_max_attempts,
+                        self.settings.worker_max_attempts,
+                        code,
+                        self.settings.worker_max_attempts,
+                        job_id,
+                        tenant_subject,
+                    ),
+                ).fetchone()
             elif stream == CAPSULE_STREAM:
-                connection.execute(
+                row = connection.execute(
                     """
                     UPDATE capsules
-                    SET status = 'FAILED_TERMINAL', error_code = %s, completed_at = now()
+                    SET status = CASE WHEN attempt + 1 >= %s
+                                      THEN 'FAILED_TERMINAL' ELSE 'FAILED_RETRYABLE' END,
+                        error_code = CASE WHEN attempt + 1 >= %s
+                                          THEN 'RETRY_EXHAUSTED' ELSE %s END,
+                        completed_at = CASE WHEN attempt + 1 >= %s THEN now() ELSE NULL END,
+                        attempt = attempt + 1
                     WHERE id = %s AND tenant_subject = %s
                       AND status NOT IN ('COMPLETED', 'FAILED_TERMINAL')
+                    RETURNING status
                     """,
-                    (code, job_id, tenant_subject),
-                )
+                    (
+                        self.settings.worker_max_attempts,
+                        self.settings.worker_max_attempts,
+                        code,
+                        self.settings.worker_max_attempts,
+                        job_id,
+                        tenant_subject,
+                    ),
+                ).fetchone()
+            else:
+                raise ValueError("unknown worker stream")
             connection.commit()
+            return row is None or row[0] == "FAILED_TERMINAL"
