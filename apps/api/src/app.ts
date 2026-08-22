@@ -406,6 +406,7 @@ export async function buildApp(
   });
 
   app.post("/v1/api-keys", async (request, reply) => {
+    const requestIdempotencyKey = idempotencyKey(request);
     const session = await requireSession(
       dependencies.clerk,
       toWebRequest(request, config.API_ORIGIN),
@@ -421,17 +422,62 @@ export async function buildApp(
         "urn:smcp:problem:invalid-expiry",
       );
     }
-    const key = await dependencies.clerk.createApiKey({
-      name: input.name,
-      subject: session.tenantSubject,
-      createdBy: session.actorSubject,
+    const normalizedInput = {
+      ...input,
       scopes: [...new Set(input.scopes)].sort(),
-      claims: { smcp_issued: true },
-      secondsUntilExpiration,
-    });
-    if (!key.secret)
-      throw new Error("Clerk did not return a one-time API-key secret");
-    return reply.status(201).send(key);
+    };
+    const route = "POST /v1/api-keys";
+    const claim = await dependencies.database.claimExternalMutation(
+      session.tenantSubject,
+      route,
+      requestIdempotencyKey,
+      normalizedInput,
+    );
+    if (claim.state === "pending") {
+      throw new ApiProblem(
+        409,
+        "An API-key creation with this idempotency key is still in progress",
+        "urn:smcp:problem:idempotency-in-progress",
+      );
+    }
+    if (claim.state === "completed") {
+      throw new ApiProblem(
+        409,
+        "This idempotent API-key creation already completed; its one-time secret cannot be replayed",
+        "urn:smcp:problem:one-time-secret-already-issued",
+      );
+    }
+
+    const existing = (
+      await dependencies.clerk.listApiKeys(session.tenantSubject)
+    ).data.find((key) => key.claims?.smcp_operation_id === claim.operationId);
+    const key =
+      existing ??
+      (await dependencies.clerk.createApiKey({
+        name: normalizedInput.name,
+        subject: session.tenantSubject,
+        createdBy: session.actorSubject,
+        scopes: normalizedInput.scopes,
+        claims: {
+          smcp_issued: true,
+          smcp_operation_id: claim.operationId,
+        },
+        secondsUntilExpiration,
+      }));
+    const secret =
+      key.secret ?? (await dependencies.clerk.getApiKeySecret(key.id));
+    const { secret: _secret, ...metadata } = key;
+    await dependencies.database.completeExternalApiKeyCreation(
+      session.tenantSubject,
+      session.actorSubject,
+      request.id,
+      route,
+      requestIdempotencyKey,
+      claim.operationId,
+      key.id,
+      metadata,
+    );
+    return reply.status(201).send({ ...metadata, secret });
   });
 
   app.post("/v1/api-keys/:id/rotate", async (request, reply) => {
@@ -545,6 +591,12 @@ export async function buildApp(
     await dependencies.clerk.revokeApiKey(
       id,
       `Revoked by ${session.actorSubject}`,
+    );
+    await dependencies.database.auditApiKeyRevocation(
+      session.tenantSubject,
+      session.actorSubject,
+      request.id,
+      id,
     );
     return reply.status(204).send();
   });

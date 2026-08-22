@@ -4,7 +4,7 @@ Copy `.env.example` to `.env` and set secrets locally. Compose development crede
 
 ## Clerk
 
-Create a Clerk development instance with Organizations enabled. Set the publishable and secret keys. API keys are created by the backend with the active organization as `subject`, the requested `scopes`, bounded `secondsUntilExpiration`, and claims containing `smcp_issued: true`. The secret is rendered once and never persisted by SMCP.
+Create a Clerk development instance with Organizations enabled. Set the publishable and secret keys. API keys are created by the backend with the active organization as `subject`, the requested `scopes`, bounded `secondsUntilExpiration`, and claims containing `smcp_issued: true`. Creation requires `Idempotency-Key`: PostgreSQL reserves a non-secret operation ID before the Clerk call, and the Clerk key carries that operation ID so a crash can reconcile instead of creating a duplicate. A completed operation returns `409` on replay because its one-time secret cannot be shown twice. SMCP never persists the secret in PostgreSQL, logs or audit metadata.
 
 Rotation supports an overlap window from zero through 86,400 seconds. The replacement secret is still returned exactly once. PostgreSQL durably records the old key's revocation deadline; each API replica claims due rows with `SKIP LOCKED`, retries Clerk failures with bounded exponential backoff, and stores only redacted error classes. A key can be rotated only once, so a retried request never creates a second live replacement secret.
 

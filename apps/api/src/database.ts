@@ -23,6 +23,17 @@ export type ProjectRecord = {
   created_at: Date;
 };
 
+export type ExternalMutationClaim =
+  | { state: "claimed"; operationId: string }
+  | { state: "pending"; operationId: string }
+  | {
+      state: "completed";
+      operationId: string;
+      externalResourceId: string;
+      responseStatus: number;
+      responseBody: Record<string, unknown>;
+    };
+
 export type SourceObjectRecord = {
   id: string;
   tenant_subject: string;
@@ -711,6 +722,159 @@ export class Database {
       `;
       return rows[0]!;
     });
+  }
+
+  public async claimExternalMutation(
+    tenantSubject: string,
+    route: string,
+    idempotencyKey: string,
+    input: unknown,
+  ): Promise<ExternalMutationClaim> {
+    const fingerprint = createHash("sha256")
+      .update(JSON.stringify(input))
+      .digest();
+    return this.sql.begin(async (transaction) => {
+      const operationId = randomUUID();
+      const inserted = await transaction<{ resource_id: string }[]>`
+        INSERT INTO idempotency_records (
+          tenant_subject, route, key, request_fingerprint,
+          resource_id, expires_at
+        ) VALUES (
+          ${tenantSubject}, ${route}, ${idempotencyKey}, ${fingerprint},
+          ${operationId}, now() + interval '24 hours'
+        )
+        ON CONFLICT (tenant_subject, route, key) DO NOTHING
+        RETURNING resource_id
+      `;
+      if (inserted[0]) return { state: "claimed", operationId };
+
+      const rows = await transaction<
+        {
+          request_fingerprint: Buffer;
+          response_status: number | null;
+          response_body: Record<string, unknown> | null;
+          resource_id: string;
+          external_resource_id: string | null;
+          locked_at: Date;
+          expires_at: Date;
+        }[]
+      >`
+        SELECT request_fingerprint, response_status, response_body,
+               resource_id, external_resource_id, locked_at, expires_at
+        FROM idempotency_records
+        WHERE tenant_subject = ${tenantSubject}
+          AND route = ${route} AND key = ${idempotencyKey}
+        FOR UPDATE
+      `;
+      const record = rows[0];
+      if (!record) throw new Error("idempotency record disappeared");
+      if (record.expires_at.getTime() <= Date.now()) {
+        await transaction`
+          UPDATE idempotency_records
+          SET request_fingerprint = ${fingerprint}, response_status = NULL,
+              response_body = NULL, resource_id = ${operationId},
+              external_resource_id = NULL, locked_at = now(),
+              expires_at = now() + interval '24 hours'
+          WHERE tenant_subject = ${tenantSubject}
+            AND route = ${route} AND key = ${idempotencyKey}
+        `;
+        return { state: "claimed", operationId };
+      }
+      if (!record.request_fingerprint.equals(fingerprint)) {
+        throw new ApiProblem(
+          409,
+          "Idempotency key was already used with a different request",
+          "urn:smcp:problem:idempotency-conflict",
+        );
+      }
+      if (
+        record.response_status !== null &&
+        record.response_body !== null &&
+        record.external_resource_id !== null
+      ) {
+        return {
+          state: "completed",
+          operationId: record.resource_id,
+          externalResourceId: record.external_resource_id,
+          responseStatus: record.response_status,
+          responseBody: record.response_body,
+        };
+      }
+      if (record.locked_at.getTime() > Date.now() - 5 * 60_000) {
+        return { state: "pending", operationId: record.resource_id };
+      }
+      await transaction`
+        UPDATE idempotency_records SET locked_at = now()
+        WHERE tenant_subject = ${tenantSubject}
+          AND route = ${route} AND key = ${idempotencyKey}
+      `;
+      return { state: "claimed", operationId: record.resource_id };
+    });
+  }
+
+  public async completeExternalApiKeyCreation(
+    tenantSubject: string,
+    actorSubject: string,
+    requestId: string,
+    route: string,
+    idempotencyKey: string,
+    operationId: string,
+    apiKeyId: string,
+    responseBody: Record<string, unknown>,
+  ): Promise<void> {
+    await this.sql.begin(async (transaction) => {
+      const updated = await transaction<{ resource_id: string }[]>`
+        UPDATE idempotency_records
+        SET response_status = 201,
+            response_body = ${transaction.json(responseBody as postgres.JSONValue)},
+            external_resource_id = ${apiKeyId}
+        WHERE tenant_subject = ${tenantSubject} AND route = ${route}
+          AND key = ${idempotencyKey} AND resource_id = ${operationId}
+          AND response_status IS NULL
+        RETURNING resource_id
+      `;
+      if (!updated[0]) {
+        const existing = await transaction<
+          { external_resource_id: string | null }[]
+        >`
+          SELECT external_resource_id FROM idempotency_records
+          WHERE tenant_subject = ${tenantSubject} AND route = ${route}
+            AND key = ${idempotencyKey} AND resource_id = ${operationId}
+        `;
+        if (existing[0]?.external_resource_id !== apiKeyId)
+          throw new Error("API-key idempotency claim was lost");
+        return;
+      }
+      await transaction`
+        INSERT INTO audit_events (
+          tenant_subject, actor_subject, api_key_id, action, resource_type,
+          resource_id, request_id, outcome, metadata
+        ) VALUES (
+          ${tenantSubject}, ${actorSubject}, ${apiKeyId}, 'api_key.created',
+          'api_key', ${apiKeyId}, ${requestId}, 'success',
+          ${transaction.json({ operation_id: operationId })}
+        )
+      `;
+    });
+  }
+
+  public async auditApiKeyRevocation(
+    tenantSubject: string,
+    actorSubject: string,
+    requestId: string,
+    apiKeyId: string,
+  ): Promise<void> {
+    await this.audit(
+      tenantSubject,
+      null,
+      actorSubject,
+      apiKeyId,
+      "api_key.revoked",
+      "api_key",
+      apiKeyId,
+      requestId,
+      "success",
+    );
   }
 
   public async apiKeyRotationExists(

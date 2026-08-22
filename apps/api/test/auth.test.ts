@@ -39,6 +39,9 @@ class FakeClerk implements ClerkGateway {
   public getApiKey(): Promise<ManagedApiKey> {
     return Promise.resolve(this.key);
   }
+  public getApiKeySecret(): Promise<string> {
+    return Promise.resolve("test-secret");
+  }
   public revokeApiKey(): Promise<void> {
     return Promise.resolve();
   }
