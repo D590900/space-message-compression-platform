@@ -6,6 +6,7 @@ import logging
 import time
 from dataclasses import asdict
 from pathlib import Path
+from types import ModuleType
 from typing import Any, cast
 from uuid import uuid4
 
@@ -16,13 +17,24 @@ from psycopg.rows import dict_row
 from redis import Redis
 from redis.exceptions import ResponseError
 
+from smcp_worker.adapters import audio as audio_module
+from smcp_worker.adapters import image as image_module
 from smcp_worker.adapters import text as text_module
+from smcp_worker.adapters import video as video_module
+from smcp_worker.adapters.audio import OpusAudioAdapter, generate_audio_candidates
+from smcp_worker.adapters.image import (
+    AvifImageAdapter,
+    JpegXlImageAdapter,
+    generate_image_candidates,
+)
 from smcp_worker.adapters.text import (
     BrotliTextAdapter,
     ZstandardTextAdapter,
     generate_text_candidates,
 )
-from smcp_worker.models import EncodedCandidate, Profile, SourceObject
+from smcp_worker.adapters.video import Av1VideoAdapter, generate_video_candidates
+from smcp_worker.capabilities import all_capabilities
+from smcp_worker.models import EncodedCandidate, Profile, QualityReport, SourceObject
 from smcp_worker.settings import Settings
 
 LOGGER = logging.getLogger(__name__)
@@ -46,12 +58,53 @@ class CompressionWorker:
         )
 
     def ensure_groups(self) -> None:
+        self._sync_codec_registry()
         for stream in (COMPRESSION_STREAM, DECOMPRESSION_STREAM):
             try:
                 self.redis.xgroup_create(stream, self.settings.worker_group, id="0", mkstream=True)
             except ResponseError as error:
                 if "BUSYGROUP" not in str(error):
                     raise
+
+    def _sync_codec_registry(self) -> None:
+        with psycopg.connect(self.settings.database_url) as connection:
+            for capability in all_capabilities():
+                module_file = self._adapter_module(capability.content_types[0]).__file__
+                if module_file is None:
+                    raise RuntimeError("codec adapter module has no source file")
+                implementation_hash = hashlib.sha256(Path(module_file).read_bytes()).digest()
+                connection.execute(
+                    """
+                    INSERT INTO codec_registry (
+                      id, version, content_type, implementation_sha256,
+                      deterministic, enabled, disabled_reason, capability
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (id, version) DO UPDATE
+                    SET implementation_sha256 = EXCLUDED.implementation_sha256,
+                        deterministic = EXCLUDED.deterministic,
+                        enabled = EXCLUDED.enabled,
+                        disabled_reason = EXCLUDED.disabled_reason,
+                        capability = EXCLUDED.capability
+                    """,
+                    (
+                        capability.codec_id,
+                        capability.codec_version,
+                        capability.content_types[0],
+                        implementation_hash,
+                        capability.deterministic,
+                        capability.enabled,
+                        capability.disabled_reason,
+                        json.dumps(
+                            {
+                                "profiles": [profile.value for profile in capability.profiles],
+                                "install_hint": capability.install_hint,
+                                "device": "cpu" if capability.enabled else None,
+                            },
+                            sort_keys=True,
+                        ),
+                    ),
+                )
+            connection.commit()
 
     def run_forever(self) -> None:
         self.ensure_groups()
@@ -109,10 +162,6 @@ class CompressionWorker:
                 raise ValueError("job does not exist for tenant")
             if job["status"] in {"COMPLETED", "FAILED_TERMINAL", "CANCELLED"}:
                 return
-            if job["input_type"] != "TEXT":
-                self._terminal_failure(connection, job, "CODEC_UNAVAILABLE")
-                return
-
             self._transition(connection, job_id, tenant_subject, "PENDING", "VALIDATING")
             response = self.s3.get_object(Bucket=self.settings.s3_bucket, Key=job["object_key"])
             source_bytes = response["Body"].read(self.settings.max_upload_bytes + 1)
@@ -127,14 +176,21 @@ class CompressionWorker:
             if expected_digest is not None and bytes(expected_digest) != digest:
                 self._terminal_failure(connection, job, "HASH_MISMATCH")
                 return
+            detected_mime = self._detected_mime(job["input_type"], job["declared_mime"])
             connection.execute(
                 """
                 UPDATE source_objects
                 SET actual_bytes = %s, sha256 = %s,
-                    detected_mime = 'text/plain', validated_at = now()
+                    detected_mime = %s, validated_at = now()
                 WHERE id = %s AND tenant_subject = %s
                 """,
-                (len(source_bytes), digest, job["source_object_id"], tenant_subject),
+                (
+                    len(source_bytes),
+                    digest,
+                    detected_mime,
+                    job["source_object_id"],
+                    tenant_subject,
+                ),
             )
             connection.commit()
 
@@ -142,12 +198,19 @@ class CompressionWorker:
             source = SourceObject(source_bytes, job["declared_mime"], job["object_key"])
             self._transition(connection, job_id, tenant_subject, "PREPROCESSING", "ENCODING")
             started = time.perf_counter_ns()
-            candidates = generate_text_candidates(source, Profile(job["profile"]))
+            input_type = str(job["input_type"])
+            candidates = self._generate_candidates(input_type, source, Profile(job["profile"]))
+            if not candidates:
+                self._terminal_failure(connection, job, "NO_QUALITY_GATED_CANDIDATE")
+                return
             encode_duration_ms = max(0, (time.perf_counter_ns() - started) // 1_000_000)
             self._transition(connection, job_id, tenant_subject, "ENCODING", "MEASURING")
 
             persisted: list[tuple[str, int, str]] = []
-            implementation_hash = hashlib.sha256(Path(text_module.__file__).read_bytes()).digest()
+            module_file = self._adapter_module(input_type).__file__
+            if module_file is None:
+                raise RuntimeError("codec adapter module has no source file")
+            implementation_hash = hashlib.sha256(Path(module_file).read_bytes()).digest()
             for candidate, report in candidates:
                 candidate_id = str(uuid4())
                 object_key = f"{tenant_subject}/{job['project_id']}/candidates/{candidate_id}.bin"
@@ -155,7 +218,7 @@ class CompressionWorker:
                     Bucket=self.settings.s3_bucket,
                     Key=object_key,
                     Body=candidate.payload,
-                    ContentType="application/vnd.smcp.candidate",
+                    ContentType=self._candidate_content_type(candidate.codec_id),
                     ServerSideEncryption="AES256",
                     Metadata={
                         "sha256": hashlib.sha256(candidate.payload).hexdigest(),
@@ -170,7 +233,7 @@ class CompressionWorker:
                     INSERT INTO codec_registry (
                       id, version, content_type, implementation_sha256,
                       deterministic, enabled, capability
-                    ) VALUES (%s, %s, 'TEXT', %s, true, true, %s)
+                    ) VALUES (%s, %s, %s, %s, true, true, %s)
                     ON CONFLICT (id, version) DO UPDATE
                     SET implementation_sha256 = EXCLUDED.implementation_sha256,
                         enabled = true,
@@ -180,11 +243,14 @@ class CompressionWorker:
                     (
                         candidate.codec_id,
                         candidate.codec_version,
+                        input_type,
                         implementation_hash,
                         json.dumps(
                             {
                                 "profiles": ["faithful", "ultra"],
-                                "round_trip": "byte_exact",
+                                "quality_gate": (
+                                    "byte_exact" if input_type == "TEXT" else "perceptual"
+                                ),
                                 "device": "cpu",
                             }
                         ),
@@ -199,7 +265,7 @@ class CompressionWorker:
                       decode_duration_ms, hardware, determinism_status, object_key, sha256
                     ) VALUES (
                       %s, %s, %s, %s, %s, %s, %s, %s, 0, %s, true, %s, 0,
-                      %s, 'BIT_EXACT', %s, %s
+                      %s, %s, %s, %s
                     )
                     ON CONFLICT (id) DO NOTHING
                     """,
@@ -215,6 +281,7 @@ class CompressionWorker:
                         json.dumps(asdict(report), sort_keys=True),
                         encode_duration_ms,
                         json.dumps({"runtime": "python", "device": "cpu"}),
+                        "BIT_EXACT" if input_type == "TEXT" else "REPRODUCIBLE_CONFIG",
                         object_key,
                         hashlib.sha256(candidate.payload).digest(),
                     ),
@@ -338,6 +405,14 @@ class CompressionWorker:
                 decoded = BrotliTextAdapter().decode(candidate)
             elif candidate.codec_id == "text.zstandard":
                 decoded = ZstandardTextAdapter().decode(candidate)
+            elif candidate.codec_id == "image.avif":
+                decoded = AvifImageAdapter().decode(candidate)
+            elif candidate.codec_id == "image.jpeg-xl":
+                decoded = JpegXlImageAdapter().decode(candidate)
+            elif candidate.codec_id == "audio.opus":
+                decoded = OpusAudioAdapter().decode(candidate)
+            elif candidate.codec_id == "video.av1":
+                decoded = Av1VideoAdapter().decode(candidate)
             else:
                 self._terminal_decompression_failure(
                     connection, decompression_id, tenant_subject, "DECODER_UNAVAILABLE"
@@ -354,7 +429,7 @@ class CompressionWorker:
             connection.commit()
 
             output_digest = hashlib.sha256(decoded).hexdigest()
-            expected_digest = job["quality_metrics"].get("original_sha256")
+            expected_digest = job["quality_metrics"].get("decoded_sha256")
             if output_digest != expected_digest:
                 self._terminal_decompression_failure(
                     connection, decompression_id, tenant_subject, "ROUND_TRIP_MISMATCH"
@@ -367,7 +442,7 @@ class CompressionWorker:
                 Bucket=self.settings.s3_bucket,
                 Key=output_key,
                 Body=decoded,
-                ContentType="text/plain; charset=utf-8",
+                ContentType=self._decoded_content_type(candidate.codec_id),
                 ServerSideEncryption="AES256",
                 Metadata={"sha256": output_digest, "verified": "true"},
             )
@@ -407,6 +482,61 @@ class CompressionWorker:
                 ),
             )
             connection.commit()
+
+    @staticmethod
+    def _generate_candidates(
+        input_type: str, source: SourceObject, profile: Profile
+    ) -> list[tuple[EncodedCandidate, QualityReport]]:
+        if input_type == "TEXT":
+            return generate_text_candidates(source, profile)
+        if input_type == "IMAGE":
+            return generate_image_candidates(source, profile)
+        if input_type == "AUDIO":
+            return generate_audio_candidates(source, profile)
+        if input_type == "VIDEO":
+            return generate_video_candidates(source, profile)
+        raise ValueError(f"unsupported content type: {input_type}")
+
+    @staticmethod
+    def _adapter_module(input_type: str) -> ModuleType:
+        modules = {
+            "TEXT": text_module,
+            "IMAGE": image_module,
+            "AUDIO": audio_module,
+            "VIDEO": video_module,
+        }
+        try:
+            return modules[input_type]
+        except KeyError as error:
+            raise ValueError(f"unsupported content type: {input_type}") from error
+
+    @staticmethod
+    def _detected_mime(input_type: str, declared_mime: str) -> str:
+        if input_type == "TEXT":
+            return "text/plain"
+        return declared_mime
+
+    @staticmethod
+    def _candidate_content_type(codec_id: str) -> str:
+        return {
+            "text.brotli": "application/vnd.smcp.brotli",
+            "text.zstandard": "application/zstd",
+            "image.avif": "image/avif",
+            "image.jpeg-xl": "image/jxl",
+            "audio.opus": "audio/ogg; codecs=opus",
+            "video.av1": "video/x-matroska; codecs=av1,opus",
+        }.get(codec_id, "application/vnd.smcp.candidate")
+
+    @staticmethod
+    def _decoded_content_type(codec_id: str) -> str:
+        return {
+            "text.brotli": "text/plain; charset=utf-8",
+            "text.zstandard": "text/plain; charset=utf-8",
+            "image.avif": "image/png",
+            "image.jpeg-xl": "image/png",
+            "audio.opus": "audio/wav",
+            "video.av1": "video/x-msvideo; codecs=ffv1,pcm_s16le",
+        }.get(codec_id, "application/octet-stream")
 
     @staticmethod
     def _transition(
