@@ -20,6 +20,24 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.98.0 --profile minimal
+      - name: Configure Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12.13"
+      - name: Configure uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: "0.8.14"
+      - name: Verify synthetic fixture hashes
+        run: python benchmarks/datasets/generate.py --verify
+      - name: Install worker benchmark dependencies
+        working-directory: services/compression-worker
+        run: uv sync --frozen
+      - name: Run text baseline smoke
+        working-directory: services/compression-worker
+        run: >-
+          uv run python ../../benchmarks/runners/run_baselines.py
+          --types text --output ../../benchmark-results/ci
       - name: Run capsule benchmark smoke
         run: >-
           cargo run --locked --release -p smcp-capsule-cli --

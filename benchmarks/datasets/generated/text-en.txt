@@ -1,0 +1,1 @@
+Telemetry packet 590900 reports nominal thermal control, stable power, and a verified capsule index. Repeatable compression preserves every byte.

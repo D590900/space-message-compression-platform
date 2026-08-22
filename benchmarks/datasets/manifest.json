@@ -1,0 +1,37 @@
+{
+  "files": [
+    {
+      "bytes": 96044,
+      "path": "generated/audio-synthetic-2s.wav",
+      "sha256": "9c7c89af22a0a8a03fa346113355215b81c57276675f8274360f6bce30f8fa9b"
+    },
+    {
+      "bytes": 655658,
+      "path": "generated/image-pattern-512.png",
+      "sha256": "39fc850808342e6cbec450844ef9b80bc1af94f6149c05bf5e4239ac8ab101c5"
+    },
+    {
+      "bytes": 146,
+      "path": "generated/text-en.txt",
+      "sha256": "5d309d965f585c28dbd3cc5a9b5207f5c162d302803f8c5d1978e61ea7a1e7c7"
+    },
+    {
+      "bytes": 125,
+      "path": "generated/text-it.txt",
+      "sha256": "fe6d02876abae9f2fd83ec28780193e99bc0215e769bad719064230b90ba9d90"
+    },
+    {
+      "bytes": 183,
+      "path": "generated/text-multilingual.txt",
+      "sha256": "c687f92daab8ead6096dbd9018e6c6bbc7d2aa86c179614b0e2ba99dadae8805"
+    },
+    {
+      "bytes": 162125,
+      "path": "generated/video-talking-head-2s.mkv",
+      "sha256": "f35ac3758b0ab6c2664d94c86e5fff7f948b6056dbfaf21a42442885882f4e09"
+    }
+  ],
+  "license": "Apache-2.0",
+  "schema_version": 1,
+  "seed": 590900
+}
