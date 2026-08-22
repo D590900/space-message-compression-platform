@@ -21,6 +21,7 @@ const config = loadConfig({
   VALKEY_URL: "redis://localhost:6379/0",
   CLERK_SECRET_KEY: "test-secret",
   CLERK_PUBLISHABLE_KEY: "test-publishable",
+  WEBHOOK_SECRET_ENCRYPTION_KEY: "MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI=",
   WEB_ORIGIN: "http://localhost:3000",
   API_ORIGIN: "http://localhost:3001",
   S3_ENDPOINT: "http://localhost:9000",

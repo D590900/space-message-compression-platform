@@ -7,6 +7,7 @@ import type {
   CreateCompressionInput,
   CreateDecompressionInput,
   CreateProjectInput,
+  CreateWebhookEndpointInput,
   JobStatus,
   PresignUploadInput,
   Profile,
@@ -159,6 +160,29 @@ export type ApiKeyRotationRecord = {
   new_key_id: string;
   revoke_at: Date;
   attempt: number;
+};
+
+export type WebhookEndpointRecord = {
+  id: string;
+  tenant_subject: string;
+  project_id: string;
+  url: string;
+  event_types: string[];
+  enabled: boolean;
+  created_at: Date;
+  disabled_at: Date | null;
+};
+
+export type WebhookDeliveryClaim = {
+  id: string;
+  tenant_subject: string;
+  endpoint_id: string;
+  event_id: string;
+  event_type: string;
+  payload: Record<string, unknown>;
+  attempt: number;
+  url: string;
+  secret_ciphertext: Buffer;
 };
 
 export class Database {
@@ -396,9 +420,11 @@ export class Database {
                   status, error_code, build_options, created_at, completed_at
       `;
       await transaction`
-        INSERT INTO outbox_events (tenant_subject, topic, aggregate_id, payload)
+        INSERT INTO outbox_events (
+          tenant_subject, project_id, topic, aggregate_id, payload
+        )
         VALUES (
-          ${tenantSubject}, 'capsule.requested', ${id},
+          ${tenantSubject}, ${input.project_id}, 'capsule.requested', ${id},
           ${transaction.json({ capsule_id: id, tenant_subject: tenantSubject })}
         )
       `;
@@ -724,9 +750,11 @@ export class Database {
                   completed_at, error_code
       `;
       await transaction`
-        INSERT INTO outbox_events (tenant_subject, topic, aggregate_id, payload)
+        INSERT INTO outbox_events (
+          tenant_subject, project_id, topic, aggregate_id, payload
+        )
         VALUES (
-          ${tenantSubject}, 'compression.requested', ${id},
+          ${tenantSubject}, ${input.project_id}, 'compression.requested', ${id},
           ${transaction.json({ job_id: id, tenant_subject: tenantSubject })}
         )
       `;
@@ -863,9 +891,11 @@ export class Database {
           verified, error_code, requested_at, completed_at
       `;
       await transaction`
-        INSERT INTO outbox_events (tenant_subject, topic, aggregate_id, payload)
+        INSERT INTO outbox_events (
+          tenant_subject, project_id, topic, aggregate_id, payload
+        )
         VALUES (
-          ${tenantSubject}, 'decompression.requested', ${id},
+          ${tenantSubject}, ${input.project_id}, 'decompression.requested', ${id},
           ${transaction.json({ decompression_id: id, tenant_subject: tenantSubject })}
         )
       `;
@@ -901,6 +931,201 @@ export class Database {
         "urn:smcp:problem:not-found",
       );
     return rows[0];
+  }
+
+  public async createWebhookEndpoint(
+    tenantSubject: string,
+    actorSubject: string,
+    apiKeyId: string,
+    requestId: string,
+    idempotencyKey: string,
+    input: CreateWebhookEndpointInput,
+    secretCiphertext: Buffer,
+  ): Promise<{ endpoint: WebhookEndpointRecord; created: boolean }> {
+    await this.assertProject(tenantSubject, input.project_id);
+    const fingerprint = createHash("sha256")
+      .update(JSON.stringify(input))
+      .digest();
+    return this.sql.begin(async (transaction) => {
+      const previous = await transaction<WebhookEndpointRecord[]>`
+        SELECT id, tenant_subject, project_id, url, event_types, enabled,
+               created_at, disabled_at
+        FROM webhook_endpoints
+        WHERE tenant_subject = ${tenantSubject}
+          AND project_id = ${input.project_id}
+          AND idempotency_key = ${idempotencyKey}
+        FOR UPDATE
+      `;
+      if (previous[0]) {
+        const matches = await transaction<{ matches: boolean }[]>`
+          SELECT request_fingerprint = ${fingerprint} AS matches
+          FROM webhook_endpoints WHERE id = ${previous[0].id}
+        `;
+        if (!matches[0]?.matches)
+          throw new ApiProblem(
+            409,
+            "Idempotency key reused with different input",
+            "urn:smcp:problem:idempotency-conflict",
+          );
+        return { endpoint: previous[0], created: false };
+      }
+      const id = randomUUID();
+      const rows = await transaction<WebhookEndpointRecord[]>`
+        INSERT INTO webhook_endpoints (
+          id, tenant_subject, project_id, url, secret_ciphertext, event_types,
+          idempotency_key, request_fingerprint
+        ) VALUES (
+          ${id}, ${tenantSubject}, ${input.project_id}, ${input.url},
+          ${secretCiphertext}, ${input.event_types}, ${idempotencyKey}, ${fingerprint}
+        )
+        RETURNING id, tenant_subject, project_id, url, event_types, enabled,
+                  created_at, disabled_at
+      `;
+      await transaction`
+        INSERT INTO audit_events (
+          tenant_subject, project_id, actor_subject, api_key_id, action,
+          resource_type, resource_id, request_id, outcome
+        ) VALUES (
+          ${tenantSubject}, ${input.project_id}, ${actorSubject}, ${apiKeyId},
+          'webhook.created', 'webhook_endpoint', ${id}, ${requestId}, 'success'
+        )
+      `;
+      return { endpoint: rows[0]!, created: true };
+    });
+  }
+
+  public async listWebhookEndpoints(
+    tenantSubject: string,
+    projectId: string,
+  ): Promise<WebhookEndpointRecord[]> {
+    await this.assertProject(tenantSubject, projectId);
+    return this.sql<WebhookEndpointRecord[]>`
+      SELECT id, tenant_subject, project_id, url, event_types, enabled,
+             created_at, disabled_at
+      FROM webhook_endpoints
+      WHERE tenant_subject = ${tenantSubject} AND project_id = ${projectId}
+      ORDER BY created_at, id
+    `;
+  }
+
+  public async disableWebhookEndpoint(
+    tenantSubject: string,
+    actorSubject: string,
+    apiKeyId: string,
+    requestId: string,
+    id: string,
+  ): Promise<void> {
+    const rows = await this.sql<{ project_id: string }[]>`
+      UPDATE webhook_endpoints
+      SET enabled = false, disabled_at = COALESCE(disabled_at, now())
+      WHERE tenant_subject = ${tenantSubject} AND id = ${id}
+      RETURNING project_id
+    `;
+    if (!rows[0])
+      throw new ApiProblem(
+        404,
+        "Webhook not found",
+        "urn:smcp:problem:not-found",
+      );
+    await this.audit(
+      tenantSubject,
+      rows[0].project_id,
+      actorSubject,
+      apiKeyId,
+      "webhook.disabled",
+      "webhook_endpoint",
+      id,
+      requestId,
+      "success",
+    );
+  }
+
+  public async materializeWebhookDeliveries(): Promise<void> {
+    await this.sql.begin(async (transaction) => {
+      await transaction`
+        INSERT INTO webhook_deliveries (
+          tenant_subject, endpoint_id, event_id, attempt, status,
+          next_attempt_at, event_type, payload
+        )
+        SELECT o.tenant_subject, e.id, o.id, 0, 'PENDING', now(), o.topic,
+               jsonb_build_object(
+                 'id', o.id, 'type', o.topic, 'created_at', o.created_at,
+                 'data', o.payload
+               )
+        FROM outbox_events o
+        JOIN webhook_endpoints e
+          ON e.tenant_subject = o.tenant_subject
+         AND e.project_id = o.project_id
+         AND e.enabled = true
+         AND o.topic = ANY(e.event_types)
+        WHERE o.published_at IS NULL AND o.project_id IS NOT NULL
+        ON CONFLICT (endpoint_id, event_id) DO NOTHING
+      `;
+      await transaction`
+        UPDATE outbox_events SET published_at = now()
+        WHERE published_at IS NULL AND project_id IS NOT NULL
+      `;
+    });
+  }
+
+  public async claimWebhookDeliveries(
+    claimToken: string,
+    limit: number,
+  ): Promise<WebhookDeliveryClaim[]> {
+    return this.sql<WebhookDeliveryClaim[]>`
+      UPDATE webhook_deliveries d
+      SET claim_token = ${claimToken}, claimed_at = now(), attempt = d.attempt + 1
+      FROM webhook_endpoints e
+      WHERE d.id IN (
+        SELECT pending.id FROM webhook_deliveries pending
+        JOIN webhook_endpoints endpoint
+          ON endpoint.id = pending.endpoint_id
+         AND endpoint.tenant_subject = pending.tenant_subject
+        WHERE pending.status IN ('PENDING', 'RETRY')
+          AND pending.next_attempt_at <= now()
+          AND endpoint.enabled = true
+          AND (pending.claimed_at IS NULL OR pending.claimed_at < now() - interval '2 minutes')
+        ORDER BY pending.next_attempt_at, pending.id
+        FOR UPDATE OF pending SKIP LOCKED
+        LIMIT ${limit}
+      )
+        AND e.id = d.endpoint_id AND e.tenant_subject = d.tenant_subject
+      RETURNING d.id, d.tenant_subject, d.endpoint_id, d.event_id,
+                d.event_type, d.payload, d.attempt, e.url, e.secret_ciphertext
+    `;
+  }
+
+  public async completeWebhookDelivery(
+    id: string,
+    claimToken: string,
+    responseCode: number,
+  ): Promise<void> {
+    await this.sql`
+      UPDATE webhook_deliveries
+      SET status = 'DELIVERED', response_code = ${responseCode},
+          delivered_at = now(), next_attempt_at = NULL,
+          claim_token = NULL, claimed_at = NULL, last_error = NULL
+      WHERE id = ${id} AND claim_token = ${claimToken}
+    `;
+  }
+
+  public async failWebhookDelivery(
+    id: string,
+    claimToken: string,
+    attempt: number,
+    maximumAttempts: number,
+    errorCode: string,
+    responseCode: number | null,
+  ): Promise<void> {
+    const terminal = attempt >= maximumAttempts;
+    await this.sql`
+      UPDATE webhook_deliveries
+      SET status = ${terminal ? "DEAD_LETTER" : "RETRY"},
+          response_code = ${responseCode}, last_error = ${errorCode},
+          next_attempt_at = ${terminal ? null : this.sql`now() + power(2, LEAST(${attempt}, 10)) * interval '1 second'`},
+          claim_token = NULL, claimed_at = NULL
+      WHERE id = ${id} AND claim_token = ${claimToken}
+    `;
   }
 
   public async cancelCompressionJob(

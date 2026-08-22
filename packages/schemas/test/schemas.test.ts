@@ -4,6 +4,7 @@ import {
   createApiKeySchema,
   createCapsulePlanSchema,
   createCompressionSchema,
+  createWebhookEndpointSchema,
   idempotencyKeySchema,
 } from "../src/index.js";
 
@@ -50,6 +51,25 @@ describe("shared API schemas", () => {
       createCapsulePlanSchema.safeParse({
         project_id: projectId,
         items: [item, item],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("accepts only HTTPS domain webhook endpoints and known events", () => {
+    const base = {
+      project_id: "85bd5e09-a8fb-4d2c-a560-5d2365badf84",
+      event_types: ["compression.completed"],
+    };
+    expect(
+      createWebhookEndpointSchema.safeParse({
+        ...base,
+        url: "https://events.example.com/smcp",
+      }).success,
+    ).toBe(true);
+    expect(
+      createWebhookEndpointSchema.safeParse({
+        ...base,
+        url: "http://events.example.com/smcp",
       }).success,
     ).toBe(false);
   });

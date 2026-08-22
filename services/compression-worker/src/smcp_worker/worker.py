@@ -369,6 +369,18 @@ class CompressionWorker:
                     ),
                 ),
             )
+            self._emit_outbox(
+                connection,
+                tenant_subject,
+                str(updated["project_id"]),
+                "compression.completed",
+                job_id,
+                {
+                    "compression_id": job_id,
+                    "selected_candidate_id": selected_id,
+                    "payload_bytes": selected_bytes,
+                },
+            )
             connection.commit()
 
     def process_capsule(self, capsule_id: str, tenant_subject: str) -> None:
@@ -563,7 +575,45 @@ class CompressionWorker:
                     ),
                 ),
             )
+            self._emit_outbox(
+                connection,
+                tenant_subject,
+                str(completed["project_id"]),
+                "capsule.completed",
+                capsule_id,
+                {
+                    "capsule_id": capsule_id,
+                    "actual_bytes": len(encoded),
+                    "budget_bytes": int(capsule["budget_bytes"]),
+                    "sha256": digest,
+                    "merkle_root": verify_report["merkle_root"],
+                },
+            )
             connection.commit()
+
+    @staticmethod
+    def _emit_outbox(
+        connection: psycopg.Connection[Any],
+        tenant_subject: str,
+        project_id: str,
+        topic: str,
+        aggregate_id: str,
+        payload: dict[str, Any],
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO outbox_events (
+              tenant_subject, project_id, topic, aggregate_id, payload
+            ) VALUES (%s, %s, %s, %s, %s)
+            """,
+            (
+                tenant_subject,
+                project_id,
+                topic,
+                aggregate_id,
+                json.dumps(payload, sort_keys=True, separators=(",", ":")),
+            ),
+        )
 
     @staticmethod
     def _write_capsule_sections(
@@ -779,6 +829,19 @@ class CompressionWorker:
                     f"worker:{decompression_id}",
                     json.dumps({"output_bytes": len(decoded), "output_sha256": output_digest}),
                 ),
+            )
+            self._emit_outbox(
+                connection,
+                tenant_subject,
+                str(completed["project_id"]),
+                "decompression.completed",
+                decompression_id,
+                {
+                    "decompression_id": decompression_id,
+                    "output_bytes": len(decoded),
+                    "output_sha256": output_digest,
+                    "verified": True,
+                },
             )
             connection.commit()
 

@@ -58,6 +58,24 @@ export const rotateApiKeySchema = z.strictObject({
   overlap_seconds: z.int().min(0).max(86_400).default(0),
 });
 
+export const webhookEventTypeValues = [
+  "compression.completed",
+  "decompression.completed",
+  "capsule.completed",
+] as const;
+export const webhookEventTypeSchema = z.enum(webhookEventTypeValues);
+
+export const createWebhookEndpointSchema = z.strictObject({
+  project_id: uuidSchema,
+  url: z.url({ protocol: /^https$/, hostname: z.regexes.domain }),
+  event_types: z
+    .array(webhookEventTypeSchema)
+    .min(1)
+    .max(webhookEventTypeValues.length)
+    .transform((values) => [...new Set(values)].sort()),
+});
+export const projectIdQuerySchema = z.strictObject({ project_id: uuidSchema });
+
 export const allowedMimeTypes = [
   "text/plain",
   "image/avif",
@@ -158,3 +176,7 @@ export type CreateDecompressionInput = z.infer<
 export type CreateCapsulePlanInput = z.infer<typeof createCapsulePlanSchema>;
 export type CreateCapsuleInput = z.infer<typeof createCapsuleSchema>;
 export type VerifyCapsuleInput = z.infer<typeof verifyCapsuleSchema>;
+export type CreateWebhookEndpointInput = z.infer<
+  typeof createWebhookEndpointSchema
+>;
+export type WebhookEventType = z.infer<typeof webhookEventTypeSchema>;

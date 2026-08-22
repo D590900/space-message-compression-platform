@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 
 import rateLimit from "@fastify/rate-limit";
 import {
@@ -8,8 +8,10 @@ import {
   createCompressionSchema,
   createDecompressionSchema,
   createProjectSchema,
+  createWebhookEndpointSchema,
   idempotencyKeySchema,
   presignUploadSchema,
+  projectIdQuerySchema,
   resourceIdParamsSchema,
   rotateApiKeySchema,
   verifyCapsuleSchema,
@@ -36,7 +38,13 @@ import {
 } from "./key-rotation-scheduler.js";
 import { ApiProblem, registerProblemHandler } from "./problem.js";
 import { JobQueue } from "./queue.js";
+import { SecretBox } from "./secret-box.js";
 import { ObjectStorage } from "./storage.js";
+import {
+  WebhookDispatcher,
+  type WebhookDispatcherGateway,
+} from "./webhook-dispatcher.js";
+import { resolvePublicWebhookUrl } from "./webhook-url.js";
 
 export type AppDependencies = {
   database: Database;
@@ -45,6 +53,7 @@ export type AppDependencies = {
   clerk: ClerkGateway;
   capsulePlanner: CapsulePlannerGateway;
   keyRotationScheduler: KeyRotationSchedulerGateway;
+  webhookDispatcher: WebhookDispatcherGateway;
 };
 
 function idempotencyKey(request: FastifyRequest): string {
@@ -61,6 +70,7 @@ export async function buildApp(
 ): Promise<{ app: FastifyInstance; dependencies: AppDependencies }> {
   const database = overrides.database ?? new Database(config.DATABASE_URL);
   const clerk = overrides.clerk ?? new ProductionClerkGateway(config);
+  const webhookSecretBox = new SecretBox(config.WEBHOOK_SECRET_ENCRYPTION_KEY);
   const dependencies: AppDependencies = {
     database,
     queue: overrides.queue ?? new JobQueue(config.VALKEY_URL),
@@ -72,8 +82,18 @@ export async function buildApp(
     keyRotationScheduler:
       overrides.keyRotationScheduler ??
       new KeyRotationScheduler(database, clerk, config.KEY_ROTATION_POLL_MS),
+    webhookDispatcher:
+      overrides.webhookDispatcher ??
+      new WebhookDispatcher(
+        database,
+        config.WEBHOOK_SECRET_ENCRYPTION_KEY,
+        config.WEBHOOK_POLL_MS,
+        config.WEBHOOK_MAX_ATTEMPTS,
+        config.WEBHOOK_TIMEOUT_MS,
+      ),
   };
   dependencies.keyRotationScheduler.start();
+  dependencies.webhookDispatcher.start();
 
   const app = Fastify({
     logger: {
@@ -480,6 +500,50 @@ export async function buildApp(
     return reply.status(204).send();
   });
 
+  app.post("/v1/webhooks", async (request, reply) => {
+    const principal = await apiPrincipal(request, "webhooks:manage");
+    const input = createWebhookEndpointSchema.parse(request.body);
+    await resolvePublicWebhookUrl(input.url);
+    const secret = `whsec_${randomBytes(32).toString("base64url")}`;
+    const result = await dependencies.database.createWebhookEndpoint(
+      principal.tenantSubject,
+      principal.actorSubject,
+      principal.keyId,
+      request.id,
+      idempotencyKey(request),
+      input,
+      webhookSecretBox.encrypt(secret),
+    );
+    return reply.status(result.created ? 201 : 200).send({
+      ...result.endpoint,
+      secret: result.created ? secret : undefined,
+      secret_available: result.created,
+    });
+  });
+
+  app.get("/v1/webhooks", async (request) => {
+    const principal = await apiPrincipal(request, "webhooks:manage");
+    const { project_id: projectId } = projectIdQuerySchema.parse(request.query);
+    const data = await dependencies.database.listWebhookEndpoints(
+      principal.tenantSubject,
+      projectId,
+    );
+    return { total_count: data.length, data };
+  });
+
+  app.delete("/v1/webhooks/:id", async (request, reply) => {
+    const principal = await apiPrincipal(request, "webhooks:manage");
+    const { id } = resourceIdParamsSchema.parse(request.params);
+    await dependencies.database.disableWebhookEndpoint(
+      principal.tenantSubject,
+      principal.actorSubject,
+      principal.keyId,
+      request.id,
+      id,
+    );
+    return reply.status(204).send();
+  });
+
   app.post("/v1/uploads/presign", async (request, reply) => {
     const requestIdempotencyKey = idempotencyKey(request);
     const principal = await apiPrincipal(request, "jobs:create");
@@ -638,6 +702,7 @@ export async function buildApp(
       dependencies.database.close(),
       dependencies.queue.close(),
       dependencies.keyRotationScheduler.close(),
+      dependencies.webhookDispatcher.close(),
     ]);
   });
 

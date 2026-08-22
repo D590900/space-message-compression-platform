@@ -10,6 +10,8 @@ x-app-environment: &app-environment
   S3_SECRET_ACCESS_KEY: smcp-local-change-me
   S3_FORCE_PATH_STYLE: "true"
   MAX_UPLOAD_BYTES: "1073741824"
+  # Local-only 32-byte key in Base64. Production must inject a managed secret.
+  WEBHOOK_SECRET_ENCRYPTION_KEY: ${WEBHOOK_SECRET_ENCRYPTION_KEY:-MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI=}
 
 services:
   postgres:
