@@ -19,7 +19,11 @@ def multilingual_source() -> SourceObject:
 @pytest.mark.parametrize(
     ("adapter", "level"), [(BrotliTextAdapter(), 11), (ZstandardTextAdapter(), 19)]
 )
-def test_exact_round_trip(adapter, level: int, multilingual_source: SourceObject) -> None:
+def test_exact_round_trip(
+    adapter: BrotliTextAdapter | ZstandardTextAdapter,
+    level: int,
+    multilingual_source: SourceObject,
+) -> None:
     prepared = adapter.preprocess(multilingual_source, Profile.FAITHFUL)
     candidate = adapter.encode(prepared, EncodeParams(level=level))
     decoded = adapter.decode(candidate)
