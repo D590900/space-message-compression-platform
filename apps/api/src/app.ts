@@ -898,11 +898,23 @@ export async function buildApp(
     const principal = await authorizedPrincipal(request, "jobs:create");
     const input = createCompressionSchema.parse(request.body);
     if (input.profile === "semantic") {
-      throw new ApiProblem(
-        422,
-        "Semantic profile is unavailable until a verified decoder and immutable weights are enabled",
-        "urn:smcp:problem:semantic-profile-unavailable",
-      );
+      const capabilities = await dependencies.database.listCodecCapabilities();
+      const supported = capabilities.some((capability) => {
+        const profiles = capability.capability.profiles;
+        return (
+          capability.enabled &&
+          capability.content_type === input.input_type &&
+          Array.isArray(profiles) &&
+          profiles.includes("semantic")
+        );
+      });
+      if (!supported) {
+        throw new ApiProblem(
+          422,
+          "Semantic profile is unavailable until a verified decoder and immutable weights are enabled",
+          "urn:smcp:problem:semantic-profile-unavailable",
+        );
+      }
     }
     const result = await dependencies.database.createCompressionJob(
       principal.tenantSubject,

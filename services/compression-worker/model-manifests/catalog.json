@@ -18,16 +18,22 @@
     {
       "id": "cod-lite",
       "codec_id": "image.cod-lite",
-      "version": "git-c49eb0d643cc",
+      "version": "bpp-0.0312-hf-cfda8135320f",
       "source": "https://github.com/microsoft/GenCodec",
       "code_commit": "c49eb0d643cc75e6c732cbc311a508627b54cf06",
       "license_code": "MIT",
       "license_code_evidence": "https://github.com/microsoft/GenCodec/blob/c49eb0d643cc75e6c732cbc311a508627b54cf06/LICENSE",
-      "license_weights": "UNKNOWN-separate-verification-required",
-      "input_contract": "Image input contract pending checkpoint-specific verification",
+      "license_weights": "MIT",
+      "license_weights_evidence": "https://huggingface.co/zhaoyangjia/CoD_Lite/blob/cfda8135320ff0bc7dfdf4e68c8e737ea07a5d64/README.md",
+      "weights_url": "https://huggingface.co/zhaoyangjia/CoD_Lite/resolve/cfda8135320ff0bc7dfdf4e68c8e737ea07a5d64/CoD_Lite_bpp_0_0312.pt",
+      "weights_sha256": "af74235d4ec4485c425bb6de93354d0a3abfc6f060cac350c2a7ea3dbd65e0ca",
+      "config_url": "https://huggingface.co/zhaoyangjia/CoD_Lite/resolve/cfda8135320ff0bc7dfdf4e68c8e737ea07a5d64/CoD_Lite_bpp_0_0312.yaml",
+      "config_sha256": "af69be08f74378e3b3a9ef5d8b629a5e8acc49b0754282deba27d31adc3c70e4",
+      "input_contract": "One RGB PNG/JPEG image; upstream converts with Pillow/to_tensor, stores uint16 width/height and uses the 0.0312-bpp, ds=16, 8-bit-codebook configuration",
+      "adapter_entrypoint": "smcp_worker.adapters.image:CodLiteImageAdapter",
       "enabled": false,
-      "disabled_reason": "Weight terms and immutable decoder artifacts are not approved",
-      "install_hint": "Verify CoD-Lite checkpoint terms separately from the MIT implementation license"
+      "disabled_reason": "Weights and adapter are approved, but the pinned CUDA decoder image has not been packaged and verified",
+      "install_hint": "Build and publish the pinned GenCodec CUDA runtime, then record its immutable image digest before enabling"
     },
     {
       "id": "snac",

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import math
+import os
 import re
 import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import replace
@@ -17,6 +20,7 @@ from smcp_worker.adapters.external import (
     transform,
     version_line,
 )
+from smcp_worker.model_manifest import ModelManifest, load_catalog
 from smcp_worker.models import (
     CodecCapabilities,
     EncodedCandidate,
@@ -29,6 +33,21 @@ from smcp_worker.models import (
 )
 
 IMAGE_MIME_TYPES = {"image/jpeg", "image/png", "image/webp", "image/tiff", "image/avif"}
+MODEL_CATALOG = Path(__file__).resolve().parents[3] / "model-manifests" / "catalog.json"
+
+
+def cod_lite_manifest_for_version(
+    version: str, catalog_path: Path = MODEL_CATALOG
+) -> ModelManifest:
+    """Resolve the immutable manifest belonging to a persisted CoD-Lite bitstream."""
+    matches = [
+        model
+        for model in load_catalog(catalog_path).models
+        if model.codec_id == "image.cod-lite" and model.version == version
+    ]
+    if len(matches) != 1:
+        raise LookupError(f"no unique CoD-Lite manifest for persisted version {version!r}")
+    return matches[0]
 
 
 def _capability(
@@ -252,6 +271,161 @@ class JpegXlImageAdapter(ImageAdapterMixin):
         )
 
 
+class CodLiteImageAdapter(ImageAdapterMixin):
+    """Wrapper for the pinned upstream CoD-Lite command-line implementation."""
+
+    def __init__(
+        self,
+        manifest: ModelManifest | None = None,
+        source_root: Path | None = None,
+        cache_root: Path | None = None,
+    ) -> None:
+        self.manifest = manifest or next(
+            model for model in load_catalog(MODEL_CATALOG).models if model.id == "cod-lite"
+        )
+        self.source_root = source_root or Path(
+            os.environ.get("SMCP_COD_LITE_ROOT", "/opt/cod-lite/CoD_Lite")
+        )
+        self.cache_root = cache_root or Path(
+            os.environ.get("SMCP_MODEL_CACHE", "/var/lib/smcp/models")
+        )
+        self.python_executable = os.environ.get("SMCP_COD_LITE_PYTHON", sys.executable)
+        self._verified_artifact_signature: tuple[tuple[int, int], tuple[int, int]] | None = None
+
+    @property
+    def model_directory(self) -> Path:
+        return self.cache_root / self.manifest.id / self.manifest.version
+
+    def capabilities(self) -> CodecCapabilities:
+        if not self.manifest.enabled:
+            return CodecCapabilities(
+                codec_id=self.manifest.codec_id,
+                codec_version=self.manifest.version,
+                content_types=("IMAGE",),
+                profiles=(Profile.ULTRA, Profile.SEMANTIC),
+                enabled=False,
+                deterministic=False,
+                disabled_reason=self.manifest.disabled_reason,
+                install_hint=self.manifest.install_hint,
+            )
+        required = (
+            self.source_root / "finetuned_one_step_codec" / "inference.py",
+            self.model_directory / "weights.bin",
+            self.model_directory / "config.yaml",
+        )
+        missing = [str(path) for path in required if not path.is_file()]
+        if missing:
+            return CodecCapabilities(
+                codec_id=self.manifest.codec_id,
+                codec_version=self.manifest.version,
+                content_types=("IMAGE",),
+                profiles=(Profile.ULTRA, Profile.SEMANTIC),
+                enabled=False,
+                deterministic=False,
+                disabled_reason=f"required pinned artifacts are missing: {', '.join(missing)}",
+                install_hint=self.manifest.install_hint,
+            )
+        weights_path, config_path = required[1:]
+        signature = (
+            (weights_path.stat().st_size, weights_path.stat().st_mtime_ns),
+            (config_path.stat().st_size, config_path.stat().st_mtime_ns),
+        )
+        if signature != self._verified_artifact_signature:
+            expected = (
+                (weights_path, self.manifest.weights_sha256),
+                (config_path, self.manifest.config_sha256),
+            )
+            for path, expected_sha256 in expected:
+                with path.open("rb") as artifact:
+                    actual_sha256 = hashlib.file_digest(artifact, "sha256").hexdigest()
+                if actual_sha256 != expected_sha256:
+                    return CodecCapabilities(
+                        codec_id=self.manifest.codec_id,
+                        codec_version=self.manifest.version,
+                        content_types=("IMAGE",),
+                        profiles=(Profile.ULTRA, Profile.SEMANTIC),
+                        enabled=False,
+                        deterministic=False,
+                        disabled_reason=f"pinned artifact failed SHA-256 verification: {path}",
+                        install_hint="Refetch the approved artifacts into the immutable cache.",
+                    )
+            self._verified_artifact_signature = signature
+        return CodecCapabilities(
+            codec_id=self.manifest.codec_id,
+            codec_version=self.manifest.version,
+            content_types=("IMAGE",),
+            profiles=(Profile.ULTRA, Profile.SEMANTIC),
+            enabled=True,
+            deterministic=False,
+        )
+
+    def _command(self, mode: str, input_path: Path, output_path: Path) -> tuple[str, ...]:
+        return (
+            self.python_executable,
+            "-m",
+            "finetuned_one_step_codec.inference",
+            mode,
+            "--ckpt",
+            str(self.model_directory / "weights.bin"),
+            "--config",
+            str(self.model_directory / "config.yaml"),
+            "--input",
+            str(input_path),
+            "--output",
+            str(output_path),
+        )
+
+    def encode(self, prepared: PreparedInput, params: EncodeParams) -> EncodedCandidate:
+        capability = self.capabilities()
+        if not capability.enabled or prepared.canonical_bytes is None:
+            raise RuntimeError(capability.disabled_reason or "canonical image is missing")
+        with tempfile.TemporaryDirectory(prefix="smcp-cod-lite-") as directory:
+            root = Path(directory)
+            input_directory = root / "input"
+            output_directory = root / "output"
+            input_directory.mkdir()
+            output_directory.mkdir()
+            (input_directory / "input.png").write_bytes(prepared.canonical_bytes)
+            run(
+                self._command("compress", input_directory, output_directory),
+                cwd=self.source_root,
+            )
+            payload = (output_directory / "input.png.cod").read_bytes()
+        if not payload:
+            raise ValueError("CoD-Lite produced an empty bitstream")
+        return EncodedCandidate(
+            self.manifest.codec_id,
+            self.manifest.version,
+            {
+                "bpp": 0.0312,
+                "checkpoint_sha256": self.manifest.weights_sha256,
+                "config_sha256": self.manifest.config_sha256,
+                "level": params.level,
+            },
+            payload,
+        )
+
+    def decode(self, candidate: EncodedCandidate) -> bytes:
+        capability = self.capabilities()
+        if not capability.enabled:
+            raise RuntimeError(capability.disabled_reason)
+        with tempfile.TemporaryDirectory(prefix="smcp-cod-lite-") as directory:
+            root = Path(directory)
+            input_directory = root / "input"
+            output_directory = root / "output"
+            input_directory.mkdir()
+            output_directory.mkdir()
+            (input_directory / "input.png.cod").write_bytes(candidate.payload)
+            run(
+                self._command("decompress", input_directory, output_directory),
+                cwd=self.source_root,
+            )
+            decoded = (output_directory / "input.png").read_bytes()
+        if not decoded:
+            raise ValueError("CoD-Lite produced an empty reconstruction")
+        return decoded
+
+
 def _metric(original: bytes, decoded: bytes, filter_name: str, pattern: str) -> float:
     with tempfile.TemporaryDirectory(prefix="smcp-metric-") as directory:
         root = Path(directory)
@@ -309,10 +483,12 @@ def generate_image_candidates(
     adapters_and_levels = (
         (AvifImageAdapter(), (20, 32, 44)),
         (JpegXlImageAdapter(), (5, 10, 20)),
+        (CodLiteImageAdapter(), (312,)),
     )
     candidates: list[tuple[EncodedCandidate, QualityReport]] = []
     for adapter, levels in adapters_and_levels:
-        if not adapter.capabilities().enabled:
+        capability = adapter.capabilities()
+        if not capability.enabled or profile not in capability.profiles:
             continue
         prepared = adapter.preprocess(source, profile)
         for level in levels:
