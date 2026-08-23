@@ -1,0 +1,130 @@
+name: LivePortrait worker
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/liveportrait-worker.yml"
+      - "infra/docker/worker-liveportrait/**"
+      - "services/compression-worker/model-manifests/**"
+      - "services/compression-worker/src/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Configure Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - name: Normalize GHCR namespace
+        id: registry
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: echo "owner=${OWNER,,}" >> "$GITHUB_OUTPUT"
+      - name: Build digest-pinned worker image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: infra/docker/worker-liveportrait/Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            VERSION=liveportrait-human
+          tags: smcp-worker-liveportrait:${{ github.sha }}
+          cache-from: type=gha,scope=liveportrait-worker
+          cache-to: type=gha,mode=max,scope=liveportrait-worker
+      - name: Verify enabled catalog and image contract
+        env:
+          IMAGE: smcp-worker-liveportrait:${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ $(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$IMAGE") == "$GITHUB_SHA" ]]
+          [[ $(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.licenses" }}' "$IMAGE") == "Apache-2.0 AND MIT" ]]
+          [[ $(docker image inspect --format '{{ .Config.User }}' "$IMAGE") == smcp ]]
+          docker run --rm --entrypoint /opt/venv/bin/python "$IMAGE" -c \
+            "from pathlib import Path; from smcp_worker.model_manifest import load_catalog; model = next(item for item in load_catalog(Path('/opt/worker/model-manifests/catalog.json')).models if item.id == 'liveportrait'); assert model.enabled; assert model.decoder_image_digest == 'sha256:b0805d6919914e3ed1a2190a48227aa5f56377e7d2735073a78718950d43c5c7'"
+          docker run --rm --entrypoint /opt/encodec-venv/bin/python "$IMAGE" -c \
+            "import torch; from src.modules.appearance_feature_extractor import AppearanceFeatureExtractor; from src.modules.motion_extractor import MotionExtractor; from src.modules.spade_generator import SPADEDecoder; from src.modules.warping_network import WarpingNetwork; from smcp_worker.liveportrait_runtime import unpack_container; assert torch.__version__ == '2.6.0+cpu'; assert AppearanceFeatureExtractor and MotionExtractor and SPADEDecoder and WarpingNetwork and unpack_container"
+          docker run --rm --entrypoint /bin/sh "$IMAGE" -c \
+            'test ! -e /var/lib/smcp/models/liveportrait; test ! -e /opt/liveportrait/src/utils/cropper.py; ! find /opt/liveportrait -iname "*insightface*" -o -iname "*crop*" -o -iname "*landmark*" | grep .'
+          host_source_hash=$(sha256sum services/compression-worker/src/smcp_worker/worker.py | cut -d' ' -f1)
+          image_source_hash=$(docker run --rm --entrypoint /usr/bin/sha256sum "$IMAGE" \
+            /opt/worker/src/smcp_worker/worker.py | cut -d' ' -f1)
+          [[ "$image_source_hash" == "$host_source_hash" ]]
+      - name: Scan candidate image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: smcp-worker-liveportrait:${{ github.sha }}
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Generate exact-image SPDX SBOM
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: smcp-worker-liveportrait:${{ github.sha }}
+          format: spdx-json
+          output: smcp-worker-liveportrait-${{ github.sha }}.spdx.json
+      - name: Sign in to GHCR
+        if: github.event_name == 'workflow_dispatch'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679fa # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish scanned worker without rebuilding
+        if: github.event_name == 'workflow_dispatch'
+        id: publish
+        env:
+          LOCAL_IMAGE: smcp-worker-liveportrait:${{ github.sha }}
+          IMAGE_NAME: ghcr.io/${{ steps.registry.outputs.owner }}/smcp-worker-liveportrait
+          VERSION: liveportrait-human
+        run: |
+          set -euo pipefail
+          docker tag "$LOCAL_IMAGE" "${IMAGE_NAME}:${VERSION}"
+          docker push "${IMAGE_NAME}:${VERSION}"
+          digest=$(docker image inspect --format '{{ index .RepoDigests 0 }}' "${IMAGE_NAME}:${VERSION}")
+          digest=${digest##*@}
+          [[ "$digest" == sha256:* ]]
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$digest" > liveportrait-worker-digest.txt
+          printf '### Published LivePortrait worker\n\n`%s@%s`\n' "$IMAGE_NAME" "$digest" >> "$GITHUB_STEP_SUMMARY"
+      - name: Attest exact worker provenance
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ghcr.io/${{ steps.registry.outputs.owner }}/smcp-worker-liveportrait
+          subject-digest: ${{ steps.publish.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+      - name: Attest exact worker SBOM
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ghcr.io/${{ steps.registry.outputs.owner }}/smcp-worker-liveportrait
+          subject-digest: ${{ steps.publish.outputs.digest }}
+          sbom-path: smcp-worker-liveportrait-${{ github.sha }}.spdx.json
+          push-to-registry: true
+          create-storage-record: false
+      - name: Upload worker audit artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: liveportrait-worker-${{ github.sha }}
+          path: |
+            smcp-worker-liveportrait-${{ github.sha }}.spdx.json
+            liveportrait-worker-digest.txt
+          if-no-files-found: ${{ github.event_name == 'workflow_dispatch' && 'error' || 'warn' }}
+          retention-days: 90

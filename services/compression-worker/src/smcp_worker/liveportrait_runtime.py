@@ -29,6 +29,7 @@ MOTION_QUANTIZATION = 16_384
 MIN_FRAMES = 2
 MAX_FRAMES = 30
 MAX_FPS = 30
+MAX_DURATION_SECONDS = 30
 MAX_KEYFRAME_BYTES = 8 * 1024 * 1024
 MAX_MOTION_BYTES = MAX_FRAMES * MOTION_VALUES_PER_FRAME * 2 + 1_024
 MAX_AUDIO_BYTES = 2 * 1024 * 1024
@@ -76,6 +77,19 @@ WEIGHT_FILES = {
 }
 
 
+def video_contract_supported(
+    width: int, height: int, rate: Fraction, frame_count: int
+) -> bool:
+    """Return whether a pre-aligned video fits all bounded runtime dimensions."""
+    return (
+        width == WIDTH
+        and height == HEIGHT
+        and MIN_FRAMES <= frame_count <= MAX_FRAMES
+        and 0 < rate <= MAX_FPS
+        and Fraction(frame_count, 1) / rate <= MAX_DURATION_SECONDS
+    )
+
+
 def pack_container(
     keyframe: bytes,
     motion_values: Sequence[int],
@@ -89,7 +103,7 @@ def pack_container(
     if not MIN_FRAMES <= frame_count <= MAX_FRAMES:
         raise ValueError("frame count is outside the LivePortrait contract")
     fps = Fraction(fps_numerator, fps_denominator)
-    if fps <= 0 or fps > MAX_FPS:
+    if fps <= 0 or fps > MAX_FPS or Fraction(frame_count, 1) / fps > MAX_DURATION_SECONDS:
         raise ValueError("frame rate is outside the LivePortrait contract")
     expected_motion_values = (frame_count - 1) * MOTION_VALUES_PER_FRAME
     if len(motion_values) != expected_motion_values:
@@ -154,7 +168,7 @@ def unpack_container(
     if not MIN_FRAMES <= frame_count <= MAX_FRAMES:
         raise ValueError("invalid LivePortrait frame count")
     fps = Fraction(fps_numerator, fps_denominator)
-    if fps <= 0 or fps > MAX_FPS:
+    if fps <= 0 or fps > MAX_FPS or Fraction(frame_count, 1) / fps > MAX_DURATION_SECONDS:
         raise ValueError("invalid LivePortrait frame rate")
     if (
         not 0 < keyframe_length <= MAX_KEYFRAME_BYTES
@@ -210,6 +224,13 @@ def _run(
     )
 
 
+def _is_positive_number(value: object) -> bool:
+    try:
+        return float(str(value)) > 0
+    except ValueError:
+        return False
+
+
 def _probe(path: Path) -> tuple[int, int, int, bool]:
     completed = _run(
         (
@@ -218,7 +239,7 @@ def _probe(path: Path) -> tuple[int, int, int, bool]:
             "error",
             "-count_frames",
             "-show_entries",
-            "stream=codec_type,width,height,avg_frame_rate,nb_read_frames",
+            "stream=codec_type,width,height,avg_frame_rate,nb_read_frames,duration",
             "-of",
             "json",
             str(path),
@@ -232,13 +253,23 @@ def _probe(path: Path) -> tuple[int, int, int, bool]:
     video = next((stream for stream in streams if stream.get("codec_type") == "video"), None)
     if not isinstance(video, dict):
         raise ValueError("input has no video stream")
-    if video.get("width") != WIDTH or video.get("height") != HEIGHT:
-        raise ValueError("LivePortrait input must be pre-aligned 512x512 video")
     rate = Fraction(str(video.get("avg_frame_rate", "0/1")))
     frame_count = int(video.get("nb_read_frames", 0))
-    if rate <= 0 or rate > MAX_FPS or not MIN_FRAMES <= frame_count <= MAX_FRAMES:
-        raise ValueError("video frame count or frame rate is outside the contract")
-    has_audio = any(stream.get("codec_type") == "audio" for stream in streams)
+    if not video_contract_supported(
+        int(video.get("width", 0)),
+        int(video.get("height", 0)),
+        rate,
+        frame_count,
+    ):
+        raise ValueError("video dimensions, duration or frame rate are outside the contract")
+    has_audio = any(
+        stream.get("codec_type") == "audio"
+        and (
+            _is_positive_number(stream.get("nb_read_frames"))
+            or _is_positive_number(stream.get("duration"))
+        )
+        for stream in streams
+    )
     return rate.numerator, rate.denominator, frame_count, has_audio
 
 
@@ -468,6 +499,7 @@ def _encode_audio(
     root: Path,
     encodec_weights: Path,
     encodec_config: Path,
+    sample_count: int,
 ) -> bytes:
     from smcp_worker.encodec_runtime import encode as encode_audio
 
@@ -488,6 +520,8 @@ def _encode_audio(
             "2",
             "-ar",
             "48000",
+            "-af",
+            f"atrim=end_sample={sample_count},apad=whole_len={sample_count}",
             "-c:a",
             "pcm_s16le",
             "-y",
@@ -530,7 +564,15 @@ def encode(
         root = Path(directory)
         keyframe = _encode_keyframe(frames[0], root, quantizer)
         audio = (
-            _encode_audio(input_path, root, encodec_weights, encodec_config) if has_audio else b""
+            _encode_audio(
+                input_path,
+                root,
+                encodec_weights,
+                encodec_config,
+                frame_count * fps_denominator * 48_000 // fps_numerator,
+            )
+            if has_audio
+            else b""
         )
     output_path.write_bytes(
         pack_container(
@@ -606,8 +648,6 @@ def _write_video(
             "-bitexact",
         )
     )
-    if audio_path is not None:
-        command.append("-shortest")
     command.extend(("-y", str(output_path)))
     _run(command, input_bytes=b"".join(frames), timeout=600)
 

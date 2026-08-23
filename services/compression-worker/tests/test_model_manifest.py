@@ -68,7 +68,10 @@ def test_committed_model_catalog_records_audited_neural_artifacts() -> None:
         "4a914ed15ed5a69e19932d05b0c51f2d22c68ffac70e959a757594cb0cd6e2a7"
     )
     liveportrait = by_id["liveportrait"]
-    assert not liveportrait.enabled
+    assert liveportrait.enabled
+    assert liveportrait.decoder_image_digest == (
+        "sha256:b0805d6919914e3ed1a2190a48227aa5f56377e7d2735073a78718950d43c5c7"
+    )
     assert liveportrait.license_weights == "MIT"
     assert liveportrait.license_weights_evidence is not None
     assert liveportrait.config_sha256 == (

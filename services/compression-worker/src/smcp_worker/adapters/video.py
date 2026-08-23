@@ -23,6 +23,7 @@ from smcp_worker.adapters.external import (
     version_line,
 )
 from smcp_worker.liveportrait_runtime import MAGIC as LIVEPORTRAIT_MAGIC
+from smcp_worker.liveportrait_runtime import video_contract_supported
 from smcp_worker.model_manifest import ModelManifest, load_catalog
 from smcp_worker.models import (
     CodecCapabilities,
@@ -442,11 +443,11 @@ class LivePortraitVideoAdapter(Av1VideoAdapter):
                 frames = int(stream["nb_read_frames"])
             except (KeyError, IndexError, ValueError, subprocess.SubprocessError):
                 return False
-        return (
-            stream.get("width") == 512
-            and stream.get("height") == 512
-            and 2 <= frames <= 30
-            and 0 < rate <= 30
+        return video_contract_supported(
+            int(stream.get("width", 0)),
+            int(stream.get("height", 0)),
+            rate,
+            frames,
         )
 
     def encode(self, prepared: PreparedInput, params: EncodeParams) -> EncodedCandidate:

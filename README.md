@@ -14,7 +14,7 @@ An API-first platform for producing reproducible, quality-gated compressed artif
 - TypeScript and Python SDKs, a JSON-output CLI, versioned OpenAPI, synthetic benchmarks and golden vectors.
 - Non-root, read-only runtime containers; full-history secret scanning, dependency scanning, image scanning, SBOMs and release provenance in CI.
 
-CoD-Lite, SNAC 24 kHz, Mimi 24 kHz and EnCodec 48 kHz are available through optional digest-pinned CUDA and CPU workers. Their weights are fetched explicitly into an external verified cache and are never bundled or downloaded implicitly. Other neural codecs remain disabled until their checkpoint-specific terms and runtime artifacts are approved.
+CoD-Lite, SNAC 24 kHz, Mimi 24 kHz, EnCodec 48 kHz and the detector-free LivePortrait core are available through optional digest-pinned CUDA and CPU workers. Their weights are fetched explicitly into an external verified cache and are never bundled or downloaded implicitly. CompressAI, MLVC and DCVC remain disabled until checkpoint-specific terms and runtime artifacts are approved.
 
 ## Repository map
 
