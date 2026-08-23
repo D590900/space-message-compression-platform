@@ -9,16 +9,24 @@ import type { ApiConfig } from "./config.js";
 
 export class ObjectStorage {
   private readonly client: S3Client;
+  private readonly publicClient: S3Client;
 
   public constructor(private readonly config: ApiConfig) {
-    this.client = new S3Client({
-      endpoint: config.S3_ENDPOINT,
+    const clientOptions = {
       region: config.S3_REGION,
       forcePathStyle: config.S3_FORCE_PATH_STYLE,
       credentials: {
         accessKeyId: config.S3_ACCESS_KEY_ID,
         secretAccessKey: config.S3_SECRET_ACCESS_KEY,
       },
+    };
+    this.client = new S3Client({
+      ...clientOptions,
+      endpoint: config.S3_ENDPOINT,
+    });
+    this.publicClient = new S3Client({
+      ...clientOptions,
+      endpoint: config.S3_PUBLIC_ENDPOINT ?? config.S3_ENDPOINT,
     });
   }
 
@@ -28,7 +36,7 @@ export class ObjectStorage {
     bytes: number,
   ): Promise<string> {
     return getSignedUrl(
-      this.client,
+      this.publicClient,
       new PutObjectCommand({
         Bucket: this.config.S3_BUCKET,
         Key: key,
@@ -42,7 +50,7 @@ export class ObjectStorage {
 
   public presignDownload(key: string): Promise<string> {
     return getSignedUrl(
-      this.client,
+      this.publicClient,
       new GetObjectCommand({ Bucket: this.config.S3_BUCKET, Key: key }),
       { expiresIn: this.config.SIGNED_URL_TTL_SECONDS },
     );

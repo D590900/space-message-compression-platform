@@ -1,0 +1,106 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-23T00:00:00.000Z",
+  "title": "Design System: SMCP Operator Console",
+  "extensions": {
+    "colorMeta": {
+      "primary": {
+        "role": "primary",
+        "displayName": "Control Indigo",
+        "canonical": "oklch(0.42 0.11 270)",
+        "tonalRamp": [
+          "oklch(0.15 0.04 270)",
+          "oklch(0.25 0.07 270)",
+          "oklch(0.35 0.1 270)",
+          "oklch(0.42 0.11 270)",
+          "oklch(0.55 0.1 270)",
+          "oklch(0.68 0.08 270)",
+          "oklch(0.82 0.04 270)",
+          "oklch(0.95 0.015 270)"
+        ]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Instrument Surface",
+        "canonical": "oklch(0.975 0.004 260)",
+        "tonalRamp": [
+          "oklch(0.15 0.008 260)",
+          "oklch(0.28 0.008 260)",
+          "oklch(0.4 0.008 260)",
+          "oklch(0.55 0.007 260)",
+          "oklch(0.68 0.006 260)",
+          "oklch(0.8 0.005 260)",
+          "oklch(0.9 0.004 260)",
+          "oklch(0.975 0.004 260)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "System Sans",
+        "purpose": "Stable product hierarchy without web-font layout shift."
+      },
+      "mono": {
+        "displayName": "UI Monospace",
+        "purpose": "Machine identifiers and measured values only."
+      }
+    },
+    "shadows": [
+      {
+        "name": "top-layer",
+        "value": "0 4px 8px oklch(0.22 0.018 265 / 0.12)",
+        "purpose": "Menus and dialogs only."
+      }
+    ],
+    "motion": [
+      {
+        "name": "state",
+        "value": "180ms cubic-bezier(0.22, 1, 0.36, 1)",
+        "purpose": "Focus, selection, and disclosure changes."
+      }
+    ],
+    "breakpoints": [
+      { "name": "compact", "value": "720px" },
+      { "name": "rail", "value": "1040px" },
+      { "name": "wide", "value": "1360px" }
+    ]
+  },
+  "components": [],
+  "narrative": {
+    "northStar": "The Accountable Ledger",
+    "overview": "A well-maintained engineering record where state is named, detail opens in place, and technical confidence comes from inspectable evidence rather than visual theater.",
+    "keyCharacteristics": [
+      "Compact navigation rail and wide command ledger.",
+      "Integrated evidence drawer.",
+      "Restrained semantic color.",
+      "System sans with machine-value monospace.",
+      "Flat ruled surfaces."
+    ],
+    "rules": [
+      {
+        "name": "Evidence-Only Color",
+        "body": "Color appears only for action, selection, focus, or state.",
+        "section": "colors"
+      },
+      {
+        "name": "Machine-Value",
+        "body": "Only machine-authored values use monospace.",
+        "section": "typography"
+      },
+      {
+        "name": "Flat Record",
+        "body": "Data surfaces remain flat at rest.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Reserve Control Indigo for primary action, current selection, and focus.",
+      "Pair every status color with an icon and explicit label."
+    ],
+    "donts": [
+      "Don't use decorative sci-fi or fictional mission language.",
+      "Don't use generic SaaS card grids or vanity metrics.",
+      "Don't claim capability without measured evidence."
+    ]
+  }
+}
