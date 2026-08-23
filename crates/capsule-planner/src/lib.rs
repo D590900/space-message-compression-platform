@@ -259,6 +259,7 @@ fn greedy(request: &PlanRequest, capacity: u64) -> Result<Plan, PlannerError> {
             .ok_or(PlannerError::RequiredItemsDoNotFit)?;
         choices[item_index] = Some(candidate_index);
     }
+    let baseline_choices = choices.clone();
 
     let mut improvements = Vec::new();
     for (item_index, item) in request.items.iter().enumerate() {
@@ -288,14 +289,25 @@ fn greedy(request: &PlanRequest, capacity: u64) -> Result<Plan, PlannerError> {
             .then_with(|| left.4.cmp(right.4))
     });
     for (_, extra_bytes, item_index, candidate_index, _) in improvements {
-        if extra_bytes <= remaining {
+        if choices[item_index] == baseline_choices[item_index] && extra_bytes <= remaining {
             remaining -= extra_bytes;
             choices[item_index] = Some(candidate_index);
         }
     }
+    let selected_bytes =
+        choices
+            .iter()
+            .enumerate()
+            .try_fold(0_u64, |total, (item_index, choice)| {
+                choice.map_or(Ok(total), |candidate_index| {
+                    total
+                        .checked_add(request.items[item_index].candidates[candidate_index].bytes)
+                        .ok_or(PlannerError::Overflow)
+                })
+            })?;
     materialize(
         request,
-        capacity - remaining,
+        selected_bytes,
         State {
             utility: 0,
             included: choices.iter().flatten().count(),
@@ -359,4 +371,42 @@ fn materialize(
         total_utility,
         solver,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn greedy_applies_at_most_one_baseline_relative_improvement_per_item() {
+        let request = PlanRequest {
+            budget_bytes: 30,
+            fixed_overhead_bytes: 0,
+            items: vec![Item {
+                id: "message".to_owned(),
+                required: false,
+                candidates: vec![
+                    Candidate {
+                        id: "efficient".to_owned(),
+                        bytes: 10,
+                        utility: 100,
+                    },
+                    Candidate {
+                        id: "larger".to_owned(),
+                        bytes: 20,
+                        utility: 150,
+                    },
+                ],
+            }],
+        };
+
+        let result = greedy(&request, 30).expect("greedy plan succeeds");
+
+        assert_eq!(result.actual_bytes, 10);
+        assert_eq!(
+            result.selections[0].candidate_id.as_deref(),
+            Some("efficient")
+        );
+        assert_eq!(result.selections[0].bytes, 10);
+    }
 }
