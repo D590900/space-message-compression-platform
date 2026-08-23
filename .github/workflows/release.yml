@@ -64,6 +64,11 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Normalize GHCR namespace
+        id: registry
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: echo "owner=${OWNER,,}" >> "$GITHUB_OUTPUT"
       - name: Build candidate image
         id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
@@ -77,15 +82,15 @@ jobs:
             VERSION=${{ github.ref_name }}
             NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${{ vars.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
           tags: |
-            ghcr.io/${{ github.repository_owner }}/smcp-${{ matrix.image }}:${{ github.ref_name }}
-            ghcr.io/${{ github.repository_owner }}/smcp-${{ matrix.image }}:latest
+            ghcr.io/${{ steps.registry.outputs.owner }}/smcp-${{ matrix.image }}:${{ github.ref_name }}
+            ghcr.io/${{ steps.registry.outputs.owner }}/smcp-${{ matrix.image }}:latest
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
       - name: Scan candidate image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
-          image-ref: ghcr.io/${{ github.repository_owner }}/smcp-${{ matrix.image }}:${{ github.ref_name }}
+          image-ref: ghcr.io/${{ steps.registry.outputs.owner }}/smcp-${{ matrix.image }}:${{ github.ref_name }}
           scanners: vuln,secret,misconfig
           severity: HIGH,CRITICAL
           ignore-unfixed: true
@@ -94,7 +99,7 @@ jobs:
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
-          image-ref: ghcr.io/${{ github.repository_owner }}/smcp-${{ matrix.image }}:${{ github.ref_name }}
+          image-ref: ghcr.io/${{ steps.registry.outputs.owner }}/smcp-${{ matrix.image }}:${{ github.ref_name }}
           format: spdx-json
           output: smcp-${{ matrix.image }}-${{ github.ref_name }}.spdx.json
       - name: Verify first-party SBOM license metadata
@@ -118,7 +123,7 @@ jobs:
       - name: Publish scanned image without rebuilding
         id: publish
         env:
-          IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/smcp-${{ matrix.image }}
+          IMAGE_NAME: ghcr.io/${{ steps.registry.outputs.owner }}/smcp-${{ matrix.image }}
           VERSION: ${{ github.ref_name }}
         run: |
           set -euo pipefail
@@ -134,14 +139,14 @@ jobs:
       - name: Attest exact image provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
-          subject-name: ghcr.io/${{ github.repository_owner }}/smcp-${{ matrix.image }}
+          subject-name: ghcr.io/${{ steps.registry.outputs.owner }}/smcp-${{ matrix.image }}
           subject-digest: ${{ steps.publish.outputs.digest }}
           push-to-registry: true
           create-storage-record: false
       - name: Attest exact image SBOM
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
-          subject-name: ghcr.io/${{ github.repository_owner }}/smcp-${{ matrix.image }}
+          subject-name: ghcr.io/${{ steps.registry.outputs.owner }}/smcp-${{ matrix.image }}
           subject-digest: ${{ steps.publish.outputs.digest }}
           sbom-path: smcp-${{ matrix.image }}-${{ github.ref_name }}.spdx.json
           push-to-registry: true
