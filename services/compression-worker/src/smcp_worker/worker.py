@@ -69,6 +69,10 @@ ACK_AND_DELETE_SCRIPT = """
 local acknowledged = redis.call('XACK', KEYS[1], ARGV[1], ARGV[2])
 if acknowledged == 1 then
   redis.call('XDEL', KEYS[1], ARGV[2])
+  redis.call('SREM', KEYS[2], ARGV[2])
+  if redis.call('SCARD', KEYS[2]) == 0 then
+    redis.call('DEL', KEYS[2])
+  end
 end
 return acknowledged
 """
@@ -240,7 +244,7 @@ class CompressionWorker:
                 "rejecting queue message with invalid job id",
                 extra={"message_id": message_id},
             )
-            self._acknowledge(stream, message_id)
+            self._acknowledge(stream, message_id, job_id)
             return
         job_type = {
             COMPRESSION_STREAM: "compression",
@@ -278,19 +282,28 @@ class CompressionWorker:
                 LOGGER.exception("worker job failed", extra={"job_id": job_id, "stream": stream})
                 terminal = self._fail_job(stream, job_id, tenant_subject, "WORKER_FAILURE")
                 if terminal:
-                    self._acknowledge(stream, message_id)
+                    self._acknowledge(stream, message_id, job_id)
             else:
                 JOBS.labels(job_type=job_type, outcome="processed").inc()
-                self._acknowledge(stream, message_id)
+                self._acknowledge(stream, message_id, job_id)
             finally:
                 JOB_DURATION.labels(job_type=job_type).observe(time.perf_counter() - started)
 
-    def _acknowledge(self, stream: str, message_id: str) -> None:
-        """Acknowledge a terminal message and delete it only when XACK succeeds."""
+    def _acknowledge(
+        self, stream: str, message_id: str, job_id: str | None = None
+    ) -> None:
+        """Atomically acknowledge a terminal message and remove its delivery marker."""
+        topic = {
+            COMPRESSION_STREAM: "compression.requested",
+            DECOMPRESSION_STREAM: "decompression.requested",
+            CAPSULE_STREAM: "capsule.requested",
+        }[stream]
+        marker_id = job_id or f"malformed:{message_id}"
         self.redis.eval(
             ACK_AND_DELETE_SCRIPT,
-            1,
+            2,
             stream,
+            f"smcp:job-delivery:{topic}:{marker_id}",
             self.settings.worker_group,
             message_id,
         )

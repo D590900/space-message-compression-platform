@@ -1,7 +1,7 @@
 import { context, TraceFlags, trace } from "@opentelemetry/api";
 import { describe, expect, it } from "vitest";
 
-import { queueCorrelationFields } from "../src/queue.js";
+import { jobDeliveryMarkerKey, queueCorrelationFields } from "../src/queue.js";
 
 describe("queue correlation", () => {
   it("injects a valid W3C parent and request ID without baggage", () => {
@@ -31,5 +31,16 @@ describe("queue correlation", () => {
       "request_id",
       "request-123",
     ]);
+  });
+
+  it("uses a topic-and-aggregate delivery marker", () => {
+    expect(
+      jobDeliveryMarkerKey(
+        "compression.requested",
+        "85bd5e09-a8fb-4d2c-a560-5d2365badf84",
+      ),
+    ).toBe(
+      "smcp:job-delivery:compression.requested:85bd5e09-a8fb-4d2c-a560-5d2365badf84",
+    );
   });
 });

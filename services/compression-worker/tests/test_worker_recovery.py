@@ -96,7 +96,12 @@ def test_retryable_message_stays_pending_until_attempts_are_exhausted(
     assert worker.redis.eval.call_count == expected_ack_count
     if terminal:
         worker.redis.eval.assert_called_once_with(
-            ACK_AND_DELETE_SCRIPT, 1, COMPRESSION_STREAM, "workers", "1-0"
+            ACK_AND_DELETE_SCRIPT,
+            2,
+            COMPRESSION_STREAM,
+            f"smcp:job-delivery:compression.requested:{job_id}",
+            "workers",
+            "1-0",
         )
     worker._fail_job.assert_called_once_with(COMPRESSION_STREAM, job_id, "tenant", "WORKER_FAILURE")
 
@@ -125,20 +130,34 @@ def test_invalid_internal_job_id_is_acknowledged_without_database_work() -> None
 
     worker.process_job.assert_not_called()
     worker.redis.eval.assert_called_once_with(
-        ACK_AND_DELETE_SCRIPT, 1, COMPRESSION_STREAM, "workers", "1-0"
+        ACK_AND_DELETE_SCRIPT,
+        2,
+        COMPRESSION_STREAM,
+        "smcp:job-delivery:compression.requested:not-a-uuid",
+        "workers",
+        "1-0",
     )
 
 
 def test_acknowledgement_deletes_only_after_the_consumer_group_acknowledges() -> None:
     worker = bare_worker()
 
-    worker._acknowledge(COMPRESSION_STREAM, "9-0")
+    worker._acknowledge(
+        COMPRESSION_STREAM, "9-0", "00000000-0000-0000-0000-000000000009"
+    )
 
     worker.redis.eval.assert_called_once_with(
-        ACK_AND_DELETE_SCRIPT, 1, COMPRESSION_STREAM, "workers", "9-0"
+        ACK_AND_DELETE_SCRIPT,
+        2,
+        COMPRESSION_STREAM,
+        "smcp:job-delivery:compression.requested:00000000-0000-0000-0000-000000000009",
+        "workers",
+        "9-0",
     )
     assert "if acknowledged == 1" in ACK_AND_DELETE_SCRIPT
     assert "XDEL" in ACK_AND_DELETE_SCRIPT
+    assert "SREM" in ACK_AND_DELETE_SCRIPT
+    assert "DEL" in ACK_AND_DELETE_SCRIPT
 
 
 def test_worker_failure_audit_contains_only_content_free_state() -> None:

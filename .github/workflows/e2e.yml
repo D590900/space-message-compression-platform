@@ -43,19 +43,27 @@ jobs:
           job_id=00000000-0000-4000-8000-000000000101
           project_id=00000000-0000-4000-8000-000000000102
           source_id=00000000-0000-4000-8000-000000000103
+          marker="smcp:job-delivery:compression.requested:$job_id"
           docker compose stop worker
-          docker compose exec -T valkey valkey-cli DEL smcp:compression-jobs >/dev/null
+          docker compose exec -T valkey valkey-cli DEL smcp:compression-jobs "$marker" >/dev/null
+          docker compose exec -T valkey valkey-cli SADD "$marker" 0-1 >/dev/null
           docker compose exec -T postgres psql -U smcp -d smcp -v ON_ERROR_STOP=1 \
             -c "INSERT INTO projects (id, tenant_subject, name) VALUES ('$project_id', 'org_reconcile_ci', 'Reconciliation CI')" \
             -c "INSERT INTO source_objects (id, tenant_subject, project_id, object_key, declared_mime, expected_bytes, upload_expires_at) VALUES ('$source_id', 'org_reconcile_ci', '$project_id', 'ci/reconcile.txt', 'text/plain', 1, now() + interval '1 hour')" \
             -c "INSERT INTO compression_jobs (id, tenant_subject, project_id, input_type, profile, source_object_id, idempotency_key, request_fingerprint) VALUES ('$job_id', 'org_reconcile_ci', '$project_id', 'TEXT', 'faithful', '$source_id', 'reconcile-ci', decode(repeat('00', 32), 'hex'))" \
-            -c "INSERT INTO outbox_events (tenant_subject, project_id, topic, aggregate_id, payload, published_at) VALUES ('org_reconcile_ci', '$project_id', 'compression.requested', '$job_id', jsonb_build_object('job_id', '$job_id'), now() - interval '2 minutes')"
+            -c "INSERT INTO outbox_events (tenant_subject, project_id, topic, aggregate_id, payload, published_at) VALUES ('org_reconcile_ci', '$project_id', 'compression.requested', '$job_id', jsonb_build_object('job_id', '$job_id', 'transport_marker_version', 1), now() - interval '2 minutes')"
+          sleep 2
+          intact_events=$(docker compose exec -T postgres psql -U smcp -d smcp -Atc \
+            "SELECT count(*) FROM outbox_events WHERE aggregate_id = '$job_id'")
+          [ "$intact_events" = 1 ] || { echo "intact delivery duplicated"; exit 1; }
+          docker compose exec -T valkey valkey-cli DEL "$marker" >/dev/null
           for attempt in $(seq 1 20); do
             events=$(docker compose exec -T postgres psql -U smcp -d smcp -Atc \
               "SELECT count(*) FROM outbox_events WHERE aggregate_id = '$job_id' AND published_at IS NOT NULL")
             stream=$(docker compose exec -T valkey valkey-cli --raw XRANGE smcp:compression-jobs - +)
-            if [ "$events" -ge 2 ] && grep -Fq "$job_id" <<<"$stream"; then
-              docker compose exec -T valkey valkey-cli DEL smcp:compression-jobs >/dev/null
+            marker_exists=$(docker compose exec -T valkey valkey-cli EXISTS "$marker")
+            if [ "$events" -ge 2 ] && [ "$marker_exists" = 1 ] && grep -Fq "$job_id" <<<"$stream"; then
+              docker compose exec -T valkey valkey-cli DEL smcp:compression-jobs "$marker" >/dev/null
               docker compose exec -T valkey valkey-cli XGROUP CREATE \
                 smcp:compression-jobs compression-workers 0 MKSTREAM >/dev/null
               docker compose exec -T postgres psql -U smcp -d smcp -v ON_ERROR_STOP=1 \
@@ -65,7 +73,7 @@ jobs:
                 -c "DELETE FROM projects WHERE id = '$project_id'"
               exit 0
             fi
-            echo "reconciliation poll $attempt/20: published_events=$events"
+            echo "reconciliation poll $attempt/20: published_events=$events marker=$marker_exists"
             sleep 1
           done
           docker compose logs --no-color api
