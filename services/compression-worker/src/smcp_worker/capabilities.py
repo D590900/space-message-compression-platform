@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from smcp_worker.adapters.audio import OpusAudioAdapter
+from smcp_worker.adapters.audio import OpusAudioAdapter, SnacAudioAdapter
 from smcp_worker.adapters.image import AvifImageAdapter, CodLiteImageAdapter, JpegXlImageAdapter
 from smcp_worker.adapters.text import BrotliTextAdapter, ZstandardTextAdapter
 from smcp_worker.adapters.video import Av1VideoAdapter
@@ -18,6 +18,9 @@ def _model_capabilities() -> tuple[CodecCapabilities, ...]:
     for model in catalog.models:
         if model.id == "cod-lite":
             capabilities.append(CodLiteImageAdapter(manifest=model).capabilities())
+            continue
+        if model.id == "snac":
+            capabilities.append(SnacAudioAdapter(manifest=model).capabilities())
             continue
         if model.enabled:
             raise RuntimeError(

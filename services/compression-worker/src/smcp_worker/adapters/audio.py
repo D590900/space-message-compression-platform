@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import io
+import os
 import struct
 import subprocess
+import sys
 import tempfile
 import time
 import wave
@@ -18,6 +21,7 @@ from smcp_worker.adapters.external import (
     transform,
     version_line,
 )
+from smcp_worker.model_manifest import ModelManifest, load_catalog
 from smcp_worker.models import (
     CodecCapabilities,
     EncodedCandidate,
@@ -28,8 +32,22 @@ from smcp_worker.models import (
     QualityReport,
     SourceObject,
 )
+from smcp_worker.snac_runtime import MAX_SAMPLES as SNAC_MAX_SAMPLES
 
 AUDIO_MIME_PREFIXES = ("audio/",)
+MODEL_CATALOG = Path(__file__).resolve().parents[3] / "model-manifests" / "catalog.json"
+
+
+def snac_manifest_for_version(version: str, catalog_path: Path = MODEL_CATALOG) -> ModelManifest:
+    """Resolve the immutable manifest belonging to a persisted SNAC bitstream."""
+    matches = [
+        model
+        for model in load_catalog(catalog_path).models
+        if model.codec_id == "audio.snac" and model.version == version
+    ]
+    if len(matches) != 1:
+        raise LookupError(f"no unique SNAC manifest for persisted version {version!r}")
+    return matches[0]
 
 
 def _ffmpeg_capability() -> CodecCapabilities:
@@ -246,6 +264,155 @@ class OpusAudioAdapter:
         )
 
 
+class SnacAudioAdapter(OpusAudioAdapter):
+    """Wrapper for the pinned official SNAC 24 kHz speech checkpoint."""
+
+    def __init__(
+        self,
+        manifest: ModelManifest | None = None,
+        source_root: Path | None = None,
+        cache_root: Path | None = None,
+    ) -> None:
+        self.manifest = manifest or next(
+            model for model in load_catalog(MODEL_CATALOG).models if model.id == "snac"
+        )
+        self.source_root = source_root or Path(os.environ.get("SMCP_SNAC_ROOT", "/opt/snac"))
+        self.cache_root = cache_root or Path(
+            os.environ.get("SMCP_MODEL_CACHE", "/var/lib/smcp/models")
+        )
+        self.python_executable = os.environ.get("SMCP_SNAC_PYTHON", sys.executable)
+        self._verified_artifact_signature: tuple[tuple[int, int], tuple[int, int]] | None = None
+
+    @property
+    def model_directory(self) -> Path:
+        return self.cache_root / self.manifest.id / self.manifest.version
+
+    def _capability(
+        self,
+        *,
+        enabled: bool,
+        disabled_reason: str | None = None,
+        install_hint: str | None = None,
+    ) -> CodecCapabilities:
+        return CodecCapabilities(
+            codec_id=self.manifest.codec_id,
+            codec_version=self.manifest.version,
+            content_types=("AUDIO",),
+            profiles=(Profile.ULTRA, Profile.SEMANTIC),
+            enabled=enabled,
+            deterministic=True,
+            disabled_reason=disabled_reason,
+            install_hint=install_hint,
+        )
+
+    def capabilities(self) -> CodecCapabilities:
+        if not self.manifest.enabled:
+            return self._capability(
+                enabled=False,
+                disabled_reason=self.manifest.disabled_reason,
+                install_hint=self.manifest.install_hint,
+            )
+        required = (
+            self.source_root / "snac" / "snac.py",
+            self.model_directory / "weights.bin",
+            self.model_directory / "config.yaml",
+        )
+        missing = [str(path) for path in required if not path.is_file()]
+        if missing:
+            return self._capability(
+                enabled=False,
+                disabled_reason=f"required pinned artifacts are missing: {', '.join(missing)}",
+                install_hint=self.manifest.install_hint,
+            )
+        weights_path, config_path = required[1:]
+        signature = (
+            (weights_path.stat().st_size, weights_path.stat().st_mtime_ns),
+            (config_path.stat().st_size, config_path.stat().st_mtime_ns),
+        )
+        if signature != self._verified_artifact_signature:
+            for path, expected_sha256 in (
+                (weights_path, self.manifest.weights_sha256),
+                (config_path, self.manifest.config_sha256),
+            ):
+                with path.open("rb") as artifact:
+                    actual_sha256 = hashlib.file_digest(artifact, "sha256").hexdigest()
+                if actual_sha256 != expected_sha256:
+                    return self._capability(
+                        enabled=False,
+                        disabled_reason=f"pinned artifact failed SHA-256 verification: {path}",
+                        install_hint="Refetch the approved artifacts into the immutable cache.",
+                    )
+            self._verified_artifact_signature = signature
+        return self._capability(enabled=True)
+
+    def _command(self, mode: str, input_path: Path, output_path: Path) -> tuple[str, ...]:
+        return (
+            self.python_executable,
+            "-m",
+            "smcp_worker.snac_runtime",
+            mode,
+            "--weights",
+            str(self.model_directory / "weights.bin"),
+            "--config",
+            str(self.model_directory / "config.yaml"),
+            "--input",
+            str(input_path),
+            "--output",
+            str(output_path),
+        )
+
+    @staticmethod
+    def supports_prepared(prepared: PreparedInput) -> bool:
+        if prepared.canonical_bytes is None:
+            return False
+        with wave.open(io.BytesIO(prepared.canonical_bytes), "rb") as stream:
+            return (
+                stream.getnchannels() == 1
+                and stream.getsampwidth() == 2
+                and stream.getframerate() == 24_000
+                and 0 < stream.getnframes() <= SNAC_MAX_SAMPLES
+            )
+
+    def encode(self, prepared: PreparedInput, params: EncodeParams) -> EncodedCandidate:
+        capability = self.capabilities()
+        if not capability.enabled or prepared.canonical_bytes is None:
+            raise RuntimeError(capability.disabled_reason or "canonical audio is missing")
+        payload = transform(
+            prepared.canonical_bytes,
+            ".wav",
+            ".snac",
+            self._command("encode", Path("{input}"), Path("{output}")),
+            timeout=600,
+        )
+        if not payload.startswith(b"SMCPSNAC"):
+            raise ValueError("SNAC produced an invalid token container")
+        return EncodedCandidate(
+            self.manifest.codec_id,
+            self.manifest.version,
+            {
+                "bitrate_kbps": 0.98,
+                "sample_rate": 24_000,
+                "channels": 1,
+                "checkpoint_sha256": self.manifest.weights_sha256,
+                "config_sha256": self.manifest.config_sha256,
+                "level": params.level,
+            },
+            payload,
+        )
+
+    def decode(self, candidate: EncodedCandidate) -> bytes:
+        capability = self.capabilities()
+        if not capability.enabled:
+            raise RuntimeError(capability.disabled_reason)
+        return transform(
+            candidate.payload,
+            ".snac",
+            ".wav",
+            self._command("decode", Path("{input}"), Path("{output}")),
+            timeout=600,
+        )
+
+
 def _pcm_stats(payload: bytes) -> dict[str, float | int]:
     with wave.open(io.BytesIO(payload), "rb") as stream:
         if stream.getsampwidth() != 2 or stream.getnchannels() != 1:
@@ -266,26 +433,37 @@ def _pcm_stats(payload: bytes) -> dict[str, float | int]:
 def generate_audio_candidates(
     source: SourceObject, profile: Profile
 ) -> list[tuple[EncodedCandidate, QualityReport]]:
-    adapter = OpusAudioAdapter()
-    if not adapter.capabilities().enabled:
-        return []
-    prepared = adapter.preprocess(source, profile)
+    adapters_and_levels = (
+        (OpusAudioAdapter(), (12, 20, 32)),
+        (SnacAudioAdapter(), (980,)),
+    )
     candidates: list[tuple[EncodedCandidate, QualityReport]] = []
-    for bitrate in (12, 20, 32):
-        encode_started = time.perf_counter_ns()
-        candidate = adapter.encode(prepared, EncodeParams(level=bitrate))
-        encode_duration_ms = max(0, (time.perf_counter_ns() - encode_started) // 1_000_000)
-        decode_started = time.perf_counter_ns()
-        decoded = adapter.decode(candidate)
-        decode_duration_ms = max(0, (time.perf_counter_ns() - decode_started) // 1_000_000)
-        candidate = replace(
-            candidate,
-            encode_duration_ms=encode_duration_ms,
-            decode_duration_ms=decode_duration_ms,
-        )
-        report = adapter.measure(prepared, decoded)
-        if report.quality_gate_passed:
-            candidates.append((candidate, report))
+    for adapter, levels in adapters_and_levels:
+        capability = adapter.capabilities()
+        if not capability.enabled or profile not in capability.profiles:
+            continue
+        prepared = adapter.preprocess(source, profile)
+        if isinstance(adapter, SnacAudioAdapter) and not adapter.supports_prepared(prepared):
+            continue
+        for level in levels:
+            encode_started = time.perf_counter_ns()
+            candidate = adapter.encode(prepared, EncodeParams(level=level))
+            encode_duration_ms = max(
+                0, (time.perf_counter_ns() - encode_started) // 1_000_000
+            )
+            decode_started = time.perf_counter_ns()
+            decoded = adapter.decode(candidate)
+            decode_duration_ms = max(
+                0, (time.perf_counter_ns() - decode_started) // 1_000_000
+            )
+            candidate = replace(
+                candidate,
+                encode_duration_ms=encode_duration_ms,
+                decode_duration_ms=decode_duration_ms,
+            )
+            report = adapter.measure(prepared, decoded)
+            if report.quality_gate_passed:
+                candidates.append((candidate, report))
     return pareto_frontier_per_codec(
         candidates,
         codec_id=lambda candidate: candidate.codec_id,

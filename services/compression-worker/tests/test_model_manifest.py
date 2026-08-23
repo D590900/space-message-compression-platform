@@ -11,7 +11,7 @@ from pydantic import ValidationError
 from smcp_worker.model_manifest import ModelCatalog, ModelManifest, fetch_weights, load_catalog
 
 
-def test_committed_model_catalog_enables_only_the_audited_cod_lite_runtime() -> None:
+def test_committed_model_catalog_records_audited_neural_artifacts() -> None:
     catalog = load_catalog(Path("model-manifests/catalog.json"))
     assert len(catalog.models) == 8
     by_id = {model.id: model for model in catalog.models}
@@ -28,10 +28,20 @@ def test_committed_model_catalog_enables_only_the_audited_cod_lite_runtime() -> 
     assert cod_lite.config_sha256 == (
         "af69be08f74378e3b3a9ef5d8b629a5e8acc49b0754282deba27d31adc3c70e4"
     )
+    snac = by_id["snac"]
+    assert not snac.enabled
+    assert snac.license_weights == "MIT"
+    assert snac.license_weights_evidence is not None
+    assert snac.weights_sha256 == (
+        "4b8164cc6606bfa627f1a784734c1e539891518f1191ed9194fe1e3b9b4bff40"
+    )
+    assert snac.config_sha256 == (
+        "e119b9366d4f5e73c6ca5f31137c4ff361578bbb132953a5203afe037c4012be"
+    )
     assert all(
         not model.enabled and model.license_weights.startswith("UNKNOWN")
         for model in catalog.models
-        if model.id != "cod-lite"
+        if model.id not in {"cod-lite", "snac"}
     )
 
 

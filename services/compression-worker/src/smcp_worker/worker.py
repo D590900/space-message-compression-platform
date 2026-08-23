@@ -27,7 +27,12 @@ from smcp_worker.adapters import audio as audio_module
 from smcp_worker.adapters import image as image_module
 from smcp_worker.adapters import text as text_module
 from smcp_worker.adapters import video as video_module
-from smcp_worker.adapters.audio import OpusAudioAdapter, generate_audio_candidates
+from smcp_worker.adapters.audio import (
+    OpusAudioAdapter,
+    SnacAudioAdapter,
+    generate_audio_candidates,
+    snac_manifest_for_version,
+)
 from smcp_worker.adapters.external import run
 from smcp_worker.adapters.image import (
     AvifImageAdapter,
@@ -983,6 +988,15 @@ class CompressionWorker:
                 decoded = CodLiteImageAdapter(manifest=manifest).decode(candidate)
             elif candidate.codec_id == "audio.opus":
                 decoded = OpusAudioAdapter().decode(candidate)
+            elif candidate.codec_id == "audio.snac":
+                try:
+                    manifest = snac_manifest_for_version(candidate.codec_version)
+                except LookupError:
+                    self._terminal_decompression_failure(
+                        connection, decompression_id, tenant_subject, "DECODER_UNAVAILABLE"
+                    )
+                    return
+                decoded = SnacAudioAdapter(manifest=manifest).decode(candidate)
             elif candidate.codec_id == "video.av1":
                 decoded = Av1VideoAdapter().decode(candidate)
             else:
@@ -1217,6 +1231,7 @@ class CompressionWorker:
             "image.avif": "image/avif",
             "image.jpeg-xl": "image/jxl",
             "audio.opus": "audio/ogg; codecs=opus",
+            "audio.snac": "application/vnd.smcp.snac",
             "video.av1": "video/x-matroska; codecs=av1,opus",
         }.get(codec_id, "application/vnd.smcp.candidate")
 
@@ -1228,6 +1243,7 @@ class CompressionWorker:
             "image.avif": "image/png",
             "image.jpeg-xl": "image/png",
             "audio.opus": "audio/wav",
+            "audio.snac": "audio/wav",
             "video.av1": "video/x-msvideo; codecs=ffv1,pcm_s16le",
         }.get(codec_id, "application/octet-stream")
 
