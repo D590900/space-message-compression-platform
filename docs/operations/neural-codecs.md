@@ -53,6 +53,7 @@ The official `hubertsiuzdak/snac_24khz` checkpoint at immutable Hugging Face rev
 Fetch the checkpoint into an external cache as the container UID, seal files read-only, then start the derived worker with the cache mounted read-only:
 
 ```console
+install -d -m 0700 "$PWD/model-cache"
 docker run --rm --user root \
   --mount type=bind,source="$PWD/model-cache",target=/var/lib/smcp/models \
   --entrypoint /bin/sh \
@@ -81,6 +82,7 @@ The CPU-only runtime has a hash-locked dependency graph and keeps the checkpoint
 Fetch the checkpoint into an external cache as the container UID, seal files read-only, then start the derived worker with the cache mounted read-only:
 
 ```console
+install -d -m 0700 "$PWD/model-cache"
 docker run --rm --user root \
   --mount type=bind,source="$PWD/model-cache",target=/var/lib/smcp/models \
   --entrypoint /bin/sh \
