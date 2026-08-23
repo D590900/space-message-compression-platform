@@ -1,8 +1,8 @@
 # Model manifests
 
-Optional neural codecs remain disabled until a manifest in this directory contains immutable, independently verified code and weight provenance. Builds and imports never download weights.
+Optional neural codecs remain disabled until a manifest in this directory contains immutable, independently verified code and weight provenance and a real decoder runtime is registered. Builds and imports never download weights.
 
-`catalog.json` pins the reviewed implementation revision and code-license evidence for every optional family. Weight terms remain `UNKNOWN` until independently verified, so every entry is disabled. That is intentional: an implementation repository license is not evidence for a checkpoint license.
+`catalog.json` pins the reviewed implementation revision and code-license evidence for every optional family. CoD-Lite's selected 0.0312-bpp checkpoint has separately reviewed MIT terms, an immutable Hugging Face revision and verified weight/configuration hashes. Its runtime remains disabled until a pinned CUDA adapter and immutable decoder image are packaged. Other weight terms remain `UNKNOWN`. An implementation repository license alone is not evidence for a checkpoint license.
 
 Validate the catalog:
 
@@ -10,11 +10,13 @@ Validate the catalog:
 uv run python -m smcp_worker.model_manifest validate model-manifests/catalog.json
 ```
 
-An enabled entry must additionally provide an HTTPS weight URL, SHA-256 for weights and configuration, weight-license evidence, immutable decoder image digest, input contract and installed adapter entrypoint. Only then can an operator explicitly fetch weights into an external immutable cache:
+An enabled entry must additionally provide HTTPS weight and configuration URLs, SHA-256 for both files, weight-license evidence, immutable decoder image digest, input contract and installed adapter entrypoint. Only then can an operator explicitly fetch both artifacts into an external immutable cache:
 
 ```console
 uv run python -m smcp_worker.model_manifest fetch model-manifests/catalog.json \
   MODEL_ID VERSION --cache /var/lib/smcp/models
 ```
 
-The fetch command writes through a private temporary file, verifies SHA-256, marks the result read-only and atomically installs it. Builds, imports and catalog validation never download weights.
+The fetch command writes through private temporary files, verifies both SHA-256 values, marks the results read-only and atomically installs them as `weights.bin` and `config.yaml`. Builds, imports and catalog validation never download weights.
+
+The two-phase runtime publication and external-cache procedure are documented in [`docs/operations/neural-codecs.md`](../../../docs/operations/neural-codecs.md).

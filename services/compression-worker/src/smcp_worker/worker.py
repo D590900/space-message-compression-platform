@@ -31,6 +31,7 @@ from smcp_worker.adapters.audio import OpusAudioAdapter, generate_audio_candidat
 from smcp_worker.adapters.external import run
 from smcp_worker.adapters.image import (
     AvifImageAdapter,
+    CodLiteImageAdapter,
     JpegXlImageAdapter,
     generate_image_candidates,
 )
@@ -966,6 +967,8 @@ class CompressionWorker:
                 decoded = AvifImageAdapter().decode(candidate)
             elif candidate.codec_id == "image.jpeg-xl":
                 decoded = JpegXlImageAdapter().decode(candidate)
+            elif candidate.codec_id == "image.cod-lite":
+                decoded = CodLiteImageAdapter().decode(candidate)
             elif candidate.codec_id == "audio.opus":
                 decoded = OpusAudioAdapter().decode(candidate)
             elif candidate.codec_id == "video.av1":

@@ -27,7 +27,7 @@ def version_line(command: Sequence[str]) -> str:
 
 
 def run(
-    command: Sequence[str], *, timeout: int = COMMAND_TIMEOUT_SECONDS
+    command: Sequence[str], *, timeout: int = COMMAND_TIMEOUT_SECONDS, cwd: Path | None = None
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(  # noqa: S603 - never invokes a shell
         command,
@@ -35,6 +35,7 @@ def run(
         capture_output=True,
         text=True,
         timeout=timeout,
+        cwd=cwd,
     )
 
 
