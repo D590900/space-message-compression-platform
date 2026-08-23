@@ -55,7 +55,10 @@ def test_committed_model_catalog_records_audited_neural_artifacts() -> None:
         "aca6f44b04f7bc2e7466b71597d2d51e463ed1cf3cd7025d8848595580546c36"
     )
     encodec = by_id["encodec"]
-    assert not encodec.enabled
+    assert encodec.enabled
+    assert encodec.decoder_image_digest == (
+        "sha256:aee93174fab26f4890481db6fe9addbd1ad8c211bcdcf17cd26f1ebfc6dca653"
+    )
     assert encodec.license_weights == "MIT"
     assert encodec.license_weights_evidence is not None
     assert encodec.weights_sha256 == (

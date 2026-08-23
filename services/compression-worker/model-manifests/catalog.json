@@ -90,10 +90,10 @@
       "config_url": "https://huggingface.co/facebook/encodec_48khz/resolve/c3def8e7185ac8c8efdce6eb8c4a651e487a503e/config.json",
       "config_sha256": "4a914ed15ed5a69e19932d05b0c51f2d22c68ffac70e959a757594cb0cd6e2a7",
       "input_contract": "Stereo signed 16-bit PCM at 48 kHz, maximum 30 seconds; official 3, 6, 12 or 24 kbps modes with normalization scales and 1024-entry codebooks packed canonically as 10-bit tokens",
+      "decoder_image_digest": "sha256:aee93174fab26f4890481db6fe9addbd1ad8c211bcdcf17cd26f1ebfc6dca653",
       "adapter_entrypoint": "smcp_worker.adapters.audio:EncodecAudioAdapter",
-      "enabled": false,
-      "disabled_reason": "Approved runtime has not yet been published and pinned by immutable decoder image digest",
-      "install_hint": "Publish the scanned EnCodec 48 kHz runtime, record its digest, then enable the digest-pinned worker"
+      "enabled": true,
+      "install_hint": "Use the digest-pinned EnCodec 48 kHz CPU worker and mount the explicitly fetched model cache read-only"
     },
     {
       "id": "mlvc",

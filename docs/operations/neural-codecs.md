@@ -102,8 +102,31 @@ docker run --rm \
 
 Production deployments must replace the convenience worker tag with the digest emitted by the `mimi-worker` workflow artifact. The catalog pins the smaller runtime digest because it is the immutable decoding contract shared by derived workers.
 
-## EnCodec 48 kHz approval and runtime publication
+## EnCodec 48 kHz approval and runtime
 
 The official `facebook/encodec_48khz` checkpoint at immutable Hugging Face revision `c3def8e7185ac8c8efdce6eb8c4a651e487a503e` declares MIT terms in its model metadata. The real adapter uses the Apache-2.0 Transformers 5.5.0 implementation pinned to commit `c1c34249fa27deefbd4a377dfbf883a39baf5c6d`, accepts canonical stereo signed 16-bit PCM at 48 kHz up to 30 seconds, and stores chunk normalization scales plus 1024-entry codebooks in a bounded, versioned, canonical 10-bit token container. It loads the exact 76,291,152-byte `safetensors` checkpoint without pickle.
 
-Local Linux/amd64 validation verified the declared weight/configuration hashes, deterministic double encoding, and a real decode to exactly 48 kHz stereo with the original 0.25-second duration. The canonical 3 kbps payload was 125 bytes for a 48,078-byte PCM test input. `.github/workflows/encodec-runtime.yml` independently fetches the external artifacts, repeats the real inference gates, scans the exact weight-free image, emits SPDX and publishes only on manual dispatch. Until that workflow publishes an immutable digest and it is recorded in the catalog, `audio.encodec` remains explicitly disabled.
+Local Linux/amd64 validation verified the declared weight/configuration hashes, deterministic double encoding, and a real decode to exactly 48 kHz stereo with the original 0.25-second duration. The canonical 3 kbps payload was 125 bytes for a 48,078-byte PCM test input. `.github/workflows/encodec-runtime.yml` independently fetches the external artifacts, repeats the real inference gates, scans the exact weight-free image and emits SPDX. Run `32655720013` published and attested `ghcr.io/d590900/smcp-encodec-runtime@sha256:aee93174fab26f4890481db6fe9addbd1ad8c211bcdcf17cd26f1ebfc6dca653`; the catalog pins that immutable decoder contract.
+
+Fetch the checkpoint into an external cache as the container UID, seal files read-only, then start the derived worker with the cache mounted read-only:
+
+```console
+install -d -m 0700 "$PWD/model-cache"
+docker run --rm --user root \
+  --mount type=bind,source="$PWD/model-cache",target=/var/lib/smcp/models \
+  --entrypoint /bin/sh \
+  ghcr.io/d590900/smcp-worker-encodec:encodec-48khz \
+  -c 'chown smcp:smcp /var/lib/smcp/models && chmod 0700 /var/lib/smcp/models'
+docker run --rm \
+  --mount type=bind,source="$PWD/model-cache",target=/var/lib/smcp/models \
+  --entrypoint /opt/venv/bin/python \
+  ghcr.io/d590900/smcp-worker-encodec:encodec-48khz \
+  -m smcp_worker.model_manifest fetch \
+  /opt/worker/model-manifests/catalog.json encodec encodec-48khz-c3def8e7185a \
+  --cache /var/lib/smcp/models
+docker run --rm \
+  --mount type=bind,source="$PWD/model-cache",target=/var/lib/smcp/models,readonly \
+  ghcr.io/d590900/smcp-worker-encodec:encodec-48khz
+```
+
+Production deployments must replace the convenience worker tag with the digest emitted by the `encodec-worker` workflow artifact. The catalog pins the smaller runtime digest because it is the immutable decoding contract shared by derived workers.
