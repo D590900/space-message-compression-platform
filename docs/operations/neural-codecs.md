@@ -74,7 +74,7 @@ Production deployments must replace the convenience worker tag with the digest e
 
 ## Mimi 24 kHz approval and staging gate
 
-The official `kyutai/mimi` checkpoint at immutable Hugging Face revision `89091b3e466eb6a9d11e537bf26b144f194978f7` declares CC-BY-4.0 terms. Its real adapter uses the Apache-2.0 Transformers implementation pinned to commit `cd74917ffc3e8f84e4a886052c5ab32b7ac623cc`, accepts canonical mono signed 16-bit PCM at 24 kHz up to 30 seconds, and stores eight 2048-entry codebooks at 12.5 Hz in a bounded, versioned, canonical 11-bit token container. It loads the exact 384,649,828-byte `safetensors` checkpoint without pickle.
+The official `kyutai/mimi` checkpoint at immutable Hugging Face revision `89091b3e466eb6a9d11e537bf26b144f194978f7` declares CC-BY-4.0 terms. Its real adapter uses the Apache-2.0 Transformers 5.5.0 implementation pinned to commit `c1c34249fa27deefbd4a377dfbf883a39baf5c6d`, accepts canonical mono signed 16-bit PCM at 24 kHz up to 30 seconds, and stores eight 2048-entry codebooks at 12.5 Hz in a bounded, versioned, canonical 11-bit token container. It loads the exact 384,649,828-byte `safetensors` checkpoint without pickle.
 
 The CPU-only runtime has a hash-locked dependency graph and keeps the checkpoint external. Local Linux/amd64 validation verified both declared artifact hashes, deterministic double encoding, a real decode to exactly 24 kHz mono with the original 0.5-second duration, and a 99-byte canonical token payload for a 24,078-byte PCM test input. `.github/workflows/mimi-runtime.yml` repeats these gates, scans the exact image and publishes only on manual dispatch.
 

@@ -52,7 +52,7 @@ jobs:
           [[ $(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$IMAGE") == "$GITHUB_SHA" ]]
           [[ $(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.licenses" }}' "$IMAGE") == "Apache-2.0 AND CC-BY-4.0" ]]
           docker run --rm --entrypoint /opt/mimi-venv/bin/python "$IMAGE" -c \
-            "import torch, transformers; from transformers import MimiModel; from smcp_worker.mimi_runtime import unpack_tokens; assert torch.__version__ == '2.6.0+cpu'; assert transformers.__version__ == '4.56.2'; assert MimiModel; assert unpack_tokens"
+            "import torch, transformers; from transformers import MimiModel; from smcp_worker.mimi_runtime import unpack_tokens; assert torch.__version__ == '2.6.0+cpu'; assert transformers.__version__ == '5.5.0'; assert MimiModel; assert unpack_tokens"
           docker run --rm --entrypoint /bin/sh "$IMAGE" -c \
             'test ! -e /var/lib/smcp/models/mimi && test ! -e /usr/bin/uv && test ! -e /usr/bin/uvx'
       - name: Fetch and verify approved test artifacts

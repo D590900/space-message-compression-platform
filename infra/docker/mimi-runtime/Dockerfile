@@ -22,7 +22,7 @@ RUN uv venv --python /usr/local/bin/python3.12 /opt/mimi-venv \
       --require-hashes --no-deps --torch-backend cpu \
       --requirement /tmp/mimi-requirements.lock \
     && /opt/mimi-venv/bin/python -c \
-      "import torch, transformers; from transformers import MimiModel; from smcp_worker.mimi_runtime import pack_tokens; assert torch.__version__ == '2.6.0+cpu'; assert transformers.__version__ == '4.56.2'; assert MimiModel; assert pack_tokens" \
+      "import torch, transformers; from transformers import MimiModel; from smcp_worker.mimi_runtime import pack_tokens; assert torch.__version__ == '2.6.0+cpu'; assert transformers.__version__ == '5.5.0'; assert MimiModel; assert pack_tokens" \
     && rm /tmp/mimi-requirements.lock \
     && rm -rf /root/.cache/uv \
     && rm -f /usr/bin/uv /usr/bin/uvx \

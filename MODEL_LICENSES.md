@@ -9,7 +9,7 @@ Each optional neural adapter remains disabled until its manifest records an offi
 | CompressAI          | `1c9e3eee83a8f4c8162d38b52f78f5b0c40de175` | BSD-3-Clause          | UNKNOWN — checkpoint-specific verification required        | Disabled                             |
 | CoD-Lite / GenCodec | `c49eb0d643cc75e6c732cbc311a508627b54cf06` | MIT                   | MIT — 0.0312-bpp checkpoint at HF revision `cfda8135…`     | Enabled (CUDA)                       |
 | SNAC                | `8f79a718f1ad71f94f79999f0071348227aff22e` | MIT                   | MIT — 24 kHz checkpoint at HF revision `d73ad176…`         | Enabled (CPU)                        |
-| Mimi / Transformers | `cd74917ffc3e8f84e4a886052c5ab32b7ac623cc` | Apache-2.0            | CC-BY-4.0 — official model card at HF revision `89091b3e…` | Disabled pending runtime publication |
+| Mimi / Transformers | `c1c34249fa27deefbd4a377dfbf883a39baf5c6d` | Apache-2.0            | CC-BY-4.0 — official model card at HF revision `89091b3e…` | Disabled pending runtime publication |
 | EnCodec             | `0e2d0aed29362c8e8f52494baf3e6f99056b214f` | MIT                   | UNKNOWN — production/redistribution approval required      | Disabled                             |
 | MLVC                | `f5b90b9abc4595f8790615b532f795b4582322f2` | MIT                   | UNKNOWN — checkpoint-specific verification required        | Disabled                             |
 | DCVC                | `819c219b24db34310bbd15c51a720aaaf5eb2e7d` | MIT                   | UNKNOWN — checkpoint-specific verification required        | Disabled                             |
