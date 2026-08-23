@@ -71,8 +71,8 @@ jobs:
           echo 'e119b9366d4f5e73c6ca5f31137c4ff361578bbb132953a5203afe037c4012be  /tmp/snac-model/config.yaml' | sha256sum --check --strict
           uid=$(docker run --rm --entrypoint /usr/bin/id "$IMAGE" -u smcp)
           gid=$(docker run --rm --entrypoint /usr/bin/id "$IMAGE" -g smcp)
+          chmod 0400 /tmp/snac-model/*
           sudo chown -R "$uid:$gid" /tmp/snac-model
-          sudo chmod 0400 /tmp/snac-model/*
       - name: Exercise real encode and decode
         env:
           IMAGE: smcp-snac-runtime:${{ github.sha }}
