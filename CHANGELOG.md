@@ -4,6 +4,18 @@ All notable changes to this project are documented in this file. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- Updated the `tsx` toolchain dependency so the transitive `esbuild` version is
+  outside the affected advisory range.
+
+### Changed
+
+- Updated pinned GitHub Actions to their Node.js 24-based releases and aligned
+  the implementation audit with the published and verified `v0.1.0` release.
+
 ## [0.1.0] - 2026-08-23
 
 ### Added
@@ -32,3 +44,4 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   that the transport record was lost.
 
 [0.1.0]: https://github.com/D590900/space-message-compression-platform/releases/tag/v0.1.0
+[Unreleased]: https://github.com/D590900/space-message-compression-platform/compare/v0.1.0...HEAD
