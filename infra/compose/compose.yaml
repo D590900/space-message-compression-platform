@@ -4,6 +4,7 @@ x-app-environment: &app-environment
   DATABASE_URL: postgresql://smcp:smcp@postgres:5432/smcp
   VALKEY_URL: redis://valkey:6379/0
   S3_ENDPOINT: http://minio:9000
+  S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://127.0.0.1:19000}
   S3_REGION: us-east-1
   S3_BUCKET: smcp-private
   S3_ACCESS_KEY_ID: smcp-local
@@ -26,6 +27,41 @@ x-app-environment: &app-environment
   OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-}
 
 services:
+  web:
+    build:
+      context: ../..
+      dockerfile: infra/docker/web/Dockerfile
+      args:
+        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:?Set NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY in .env}
+    environment:
+      NODE_ENV: production
+      API_INTERNAL_ORIGIN: http://api:3001
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:?Set NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY in .env}
+      CLERK_SECRET_KEY: ${CLERK_SECRET_KEY:?Set CLERK_SECRET_KEY in .env}
+    ports:
+      - "127.0.0.1:${WEB_PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_started
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    pids_limit: 256
+    mem_limit: 512m
+    cpus: 1.0
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/health').then(r=>{if(!r.ok)process.exit(1)})",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+
   postgres:
     image: postgres:17.6-alpine3.22
     environment:
@@ -81,12 +117,14 @@ services:
     environment:
       MINIO_ROOT_USER: smcp-local
       MINIO_ROOT_PASSWORD: smcp-local-change-me
+      MINIO_API_CORS_ALLOW_ORIGIN: ${WEB_ORIGIN:-http://localhost:3000},http://127.0.0.1:3000
       # Local-only static KMS key so SSE-S3 (AES256) writes exercise the
       # production encryption contract. Production must use a managed KMS.
       MINIO_KMS_SECRET_KEY: smcp-local:MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI=
     volumes:
       - minio-data:/data
     ports:
+      - "127.0.0.1:${S3_PUBLIC_PORT:-19000}:9000"
       - "127.0.0.1:${MINIO_CONSOLE_PORT:-19001}:9001"
     healthcheck:
       test:
@@ -127,7 +165,7 @@ services:
       HOST: 0.0.0.0
       PORT: "3001"
       API_ORIGIN: http://localhost:3001
-      WEB_ORIGIN: http://localhost:3000
+      WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:3000}
       CLERK_SECRET_KEY: ${CLERK_SECRET_KEY:?Set CLERK_SECRET_KEY in .env}
       CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:?Set NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY in .env}
       LOG_LEVEL: info

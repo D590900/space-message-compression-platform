@@ -26,6 +26,7 @@ const configSchema = z
     WEB_ORIGIN: z.url(),
     API_ORIGIN: z.url(),
     S3_ENDPOINT: z.url(),
+    S3_PUBLIC_ENDPOINT: z.url().optional(),
     S3_REGION: z.string().min(1).default("us-east-1"),
     S3_BUCKET: z.string().min(3),
     S3_ACCESS_KEY_ID: z.string().min(1),
