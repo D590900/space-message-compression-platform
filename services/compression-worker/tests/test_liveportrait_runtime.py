@@ -1,5 +1,6 @@
 import hashlib
 import zlib
+from fractions import Fraction
 
 import pytest
 
@@ -10,6 +11,7 @@ from smcp_worker.liveportrait_runtime import (
     MOTION_VALUES_PER_FRAME,
     pack_container,
     unpack_container,
+    video_contract_supported,
 )
 
 
@@ -51,6 +53,21 @@ def test_liveportrait_container_supports_silent_video() -> None:
     )
 
     assert unpack_container(payload)[-1] == b""
+
+
+@pytest.mark.parametrize(
+    ("rate", "frame_count", "expected"),
+    (
+        (Fraction(1, 1), 30, True),
+        (Fraction(1, 2), 30, False),
+        (Fraction(30, 1), 30, True),
+        (Fraction(31, 1), 30, False),
+    ),
+)
+def test_liveportrait_video_contract_bounds_duration(
+    rate: Fraction, frame_count: int, expected: bool
+) -> None:
+    assert video_contract_supported(512, 512, rate, frame_count) is expected
 
 
 def test_liveportrait_container_rejects_corruption_and_trailing_data() -> None:

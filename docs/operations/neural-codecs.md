@@ -133,10 +133,40 @@ Production deployments must replace the convenience worker tag with the exact di
 
 ## LivePortrait detector-free approval and runtime publication
 
-The selected talking-head path uses only the four official human-model checkpoints from `KlingTeam/LivePortrait` revision `82a4fa6735ca58432b6ce39301b4b9ee066dea47`, whose immutable model card declares MIT terms, with source commit `9b294b3d0536135442ea73cb01e6cb3ca7029dd3`. The runtime deliberately excludes InsightFace, face detectors, landmark models, cropper code and retargeting checkpoints. Operators must supply a pre-aligned, single-person 512×512 RGB video of 2–30 frames at no more than 30 fps; inputs outside that narrow contract remain eligible for AV1 instead.
+The selected talking-head path uses only the four official human-model checkpoints from `KlingTeam/LivePortrait` revision `82a4fa6735ca58432b6ce39301b4b9ee066dea47`, whose immutable model card declares MIT terms, with source commit `9b294b3d0536135442ea73cb01e6cb3ca7029dd3`. The runtime deliberately excludes InsightFace, face detectors, landmark models, cropper code and retargeting checkpoints. Operators must supply a pre-aligned, single-person 512×512 RGB video of 2–30 frames, at no more than 30 fps or 30 seconds total duration; inputs outside that narrow contract remain eligible for AV1 instead. Optional audio is trimmed or silence-padded to the exact video duration before EnCodec inference.
 
 The binary payload is a bounded, versioned container containing one AVIF keyframe, zlib-compressed signed 16-bit deltas for 21 three-dimensional motion keypoints, and optional 3 kbps EnCodec audio. Each section is length-bounded and authenticated with SHA-256; no tensor, pickle, JSON or Base64 representation is stored. Decode loads all checkpoints with `torch.load(..., weights_only=True)` and strict state-dictionary validation. The runtime image contains only the curated MIT source subset and never embeds weights.
 
 Local Linux/amd64 validation fetched and verified all four checkpoints plus the pinned configuration and EnCodec artifacts, then ran deterministic double encoding and a real appearance → motion → warping → generator decode with network disabled and read-only image/model mounts. The two-frame 512×512 synthetic gate produced identical 5,600-byte payloads (`SHA-256 628fb277a073666335f3d427c9e5cc5205aa1ca8f911fcc5dce1e64a7c7392cf`) from a 67,584-byte canonical input. FFprobe verified a two-frame 10 fps 512×512 FFV1 reconstruction with 48 kHz stereo PCM audio.
 
-`.github/workflows/liveportrait-runtime.yml` repeats those gates on native Linux/amd64, scans the exact weight-free image, generates SPDX and publishes only on manual dispatch. LivePortrait remains disabled in the catalog until that workflow has succeeded, the registry digest has been independently matched to its audit artifact, and OCI provenance has been verified. Activation and a derived worker are intentionally deferred to a follow-up PR so a mutable or untested image can never become a declared capability.
+`.github/workflows/liveportrait-runtime.yml` repeats those gates on native Linux/amd64, scans the exact weight-free image, generates SPDX and publishes only on manual dispatch. Run `32660131532` published and attested `ghcr.io/d590900/smcp-liveportrait-runtime@sha256:b0805d6919914e3ed1a2190a48227aa5f56377e7d2735073a78718950d43c5c7`. The downloaded workflow artifact matched the GHCR manifest digest, contained a valid SPDX 2.3 document and passed independent OCI provenance verification. The catalog pins that digest as the decoder contract.
+
+Fetch both the LivePortrait core and its pinned EnCodec audio dependency into the external cache, seal the files read-only, then start the derived worker with the cache mounted read-only:
+
+```console
+install -d -m 0700 "$PWD/model-cache"
+docker run --rm --user root \
+  --mount type=bind,source="$PWD/model-cache",target=/var/lib/smcp/models \
+  --entrypoint /bin/sh \
+  ghcr.io/d590900/smcp-worker-liveportrait:liveportrait-human \
+  -c 'chown smcp:smcp /var/lib/smcp/models && chmod 0700 /var/lib/smcp/models'
+docker run --rm \
+  --mount type=bind,source="$PWD/model-cache",target=/var/lib/smcp/models \
+  --entrypoint /opt/venv/bin/python \
+  ghcr.io/d590900/smcp-worker-liveportrait:liveportrait-human \
+  -m smcp_worker.model_manifest fetch \
+  /opt/worker/model-manifests/catalog.json liveportrait liveportrait-human-82a4fa6735ca \
+  --cache /var/lib/smcp/models
+docker run --rm \
+  --mount type=bind,source="$PWD/model-cache",target=/var/lib/smcp/models \
+  --entrypoint /opt/venv/bin/python \
+  ghcr.io/d590900/smcp-worker-liveportrait:liveportrait-human \
+  -m smcp_worker.model_manifest fetch \
+  /opt/worker/model-manifests/catalog.json encodec encodec-48khz-c3def8e7185a \
+  --cache /var/lib/smcp/models
+docker run --rm \
+  --mount type=bind,source="$PWD/model-cache",target=/var/lib/smcp/models,readonly \
+  ghcr.io/d590900/smcp-worker-liveportrait:liveportrait-human
+```
+
+Production deployments must replace the convenience worker tag with the exact digest emitted by the `liveportrait-worker` workflow artifact. The catalog pins the smaller runtime digest because it is the immutable decoding contract shared by derived workers; no worker tag is treated as provenance evidence.

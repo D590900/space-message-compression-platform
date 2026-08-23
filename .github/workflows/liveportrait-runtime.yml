@@ -100,8 +100,8 @@ jobs:
           docker run --rm --network none --read-only --tmpfs /tmp:rw,noexec,nosuid,size=2147483648 \
             --mount type=bind,src=/tmp/liveportrait-io,dst=/io --entrypoint /usr/local/bin/ffmpeg "$IMAGE" \
             -v error -f lavfi -i testsrc2=size=512x512:rate=10:duration=0.2 \
-            -f lavfi -i sine=frequency=440:sample_rate=48000:duration=0.2 -map 0:v:0 -map 1:a:0 \
-            -c:v ffv1 -pix_fmt yuv420p -c:a pcm_s16le -shortest -y /io/input.avi
+            -f lavfi -i sine=frequency=440:sample_rate=48000:duration=1 -map 0:v:0 -map 1:a:0 \
+            -c:v ffv1 -pix_fmt yuv420p -c:a pcm_s16le -y /io/input.avi
           for output in output.lprt output-again.lprt; do
             docker run --rm --network none --read-only --tmpfs /tmp:rw,noexec,nosuid,size=2147483648 \
               --mount type=bind,src=/tmp/models,dst=/models,readonly \
@@ -116,6 +116,10 @@ jobs:
           docker run --rm --network none --read-only \
             --mount type=bind,src=/tmp/liveportrait-io,dst=/io,readonly \
             --entrypoint /usr/bin/cmp "$IMAGE" /io/output.lprt /io/output-again.lprt
+          docker run --rm --network none --read-only \
+            --mount type=bind,src=/tmp/liveportrait-io,dst=/io,readonly \
+            --entrypoint /opt/encodec-venv/bin/python "$IMAGE" -c \
+            "from pathlib import Path; from smcp_worker.encodec_runtime import unpack_tokens; from smcp_worker.liveportrait_runtime import unpack_container; audio = unpack_container(Path('/io/output.lprt').read_bytes())[-1]; assert unpack_tokens(audio)[0] == 9600"
           docker run --rm --network none --read-only --tmpfs /tmp:rw,noexec,nosuid,size=2147483648 \
             --mount type=bind,src=/tmp/models,dst=/models,readonly \
             --mount type=bind,src=/tmp/liveportrait-io,dst=/io \

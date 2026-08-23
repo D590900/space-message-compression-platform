@@ -58,7 +58,7 @@ The default capsule budget is 2,000,000 bytes. `pad_to_budget` is opt-in. The da
 
 ## Optional codecs
 
-CoD-Lite, SNAC, Mimi and EnCodec are enabled only in their optional digest-pinned workers after an operator places the explicitly fetched, checksum-verified artifacts in the immutable model cache. Other neural adapters remain disabled until their manifests and runtimes are approved. No application path downloads weights.
+CoD-Lite, SNAC, Mimi, EnCodec and detector-free LivePortrait are enabled only in their optional digest-pinned workers after an operator places the explicitly fetched, checksum-verified artifacts in the immutable model cache. CompressAI, MLVC and DCVC remain disabled until their checkpoint terms and runtimes are approved. No application path downloads weights.
 
 The `semantic` profile remains part of the versioned API vocabulary, but job creation returns `422 semantic-profile-unavailable` until an enabled implementation includes its verified decoder and immutable weights in the reproducibility chain. The worker also terminalizes legacy queued semantic jobs with `SEMANTIC_PROFILE_UNAVAILABLE`; it never substitutes a baseline codec while claiming semantic reconstruction.
 
@@ -74,6 +74,6 @@ Baseline media gates currently enforce:
 
 - images: four-scale structural similarity and PSNR; LPIPS and face identity remain explicitly unevaluated until versioned metric weights are approved;
 - audio: canonical mono 24 kHz PCM duration and clipping; ASR intelligibility, speaker similarity and learned perceptual metrics remain explicitly unevaluated;
-- generic video: VMAF when available, otherwise SSIM, plus duration and temporal-stability proxy; talking-head classification, pose and lip-sync require the disabled versioned model path.
+- video: VMAF when available, otherwise SSIM, plus duration and temporal-stability proxy; the LivePortrait path requires explicitly pre-aligned talking-head input, while learned pose, identity and lip-sync metrics remain unevaluated until separate metric-model manifests are approved.
 
 A metric marked `not_evaluated` is never treated as a successful learned quality assertion. Project-configurable learned thresholds remain M3/M5 work.

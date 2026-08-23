@@ -157,11 +157,11 @@
       ],
       "config_url": "https://raw.githubusercontent.com/KlingAIResearch/LivePortrait/9b294b3d0536135442ea73cb01e6cb3ca7029dd3/src/config/models.yaml",
       "config_sha256": "da135e5d5104441675411caba2ededdf26606bfa8a511a2504018d2d149512c4",
-      "input_contract": "Pre-aligned single-person 512x512 RGB talking-head video, at most 30 frames and 30 fps; no face detector, landmark model, InsightFace artifact or retargeting model is loaded",
+      "input_contract": "Pre-aligned single-person 512x512 RGB talking-head video, at most 30 frames, 30 fps and 30 seconds; audio is trimmed or silence-padded to the exact video duration; no face detector, landmark model, InsightFace artifact or retargeting model is loaded",
+      "decoder_image_digest": "sha256:b0805d6919914e3ed1a2190a48227aa5f56377e7d2735073a78718950d43c5c7",
       "adapter_entrypoint": "smcp_worker.adapters.video:LivePortraitVideoAdapter",
-      "enabled": false,
-      "disabled_reason": "Approved core runtime has not yet been published and pinned by immutable decoder image digest",
-      "install_hint": "Publish the scanned detector-free LivePortrait runtime, record its digest, then enable the digest-pinned worker"
+      "enabled": true,
+      "install_hint": "Use the digest-pinned detector-free LivePortrait CPU worker and mount both the LivePortrait and EnCodec caches read-only"
     }
   ]
 }
