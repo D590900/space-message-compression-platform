@@ -1020,7 +1020,7 @@ export async function buildApp(
   });
 
   app.post("/v1/compressions/:id/cancel", async (request, reply) => {
-    idempotencyKey(request);
+    const cancellationIdempotencyKey = idempotencyKey(request);
     const principal = await authorizedPrincipal(request, "jobs:cancel");
     const { id } = resourceIdParamsSchema.parse(request.params);
     const job = await dependencies.database.cancelCompressionJob(
@@ -1028,6 +1028,7 @@ export async function buildApp(
       principal.actorSubject,
       principal.keyId,
       request.id,
+      cancellationIdempotencyKey,
       id,
     );
     return reply.status(202).send(job);

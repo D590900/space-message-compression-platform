@@ -250,6 +250,50 @@ describe("system capability routes", () => {
     );
   });
 
+  it("forwards cancellation idempotency keys to the atomic database mutation", async () => {
+    const jobId = "2d0610bd-4567-41ab-9a7a-8a5fd320c7ce";
+    const cancelCompressionJob = vi.fn(() =>
+      Promise.resolve({ id: jobId, status: "CANCELLED" }),
+    );
+    const cancellationClerk = {
+      ...clerk,
+      verifyApiKey: () =>
+        Promise.resolve({ ...managedKey, scopes: ["jobs:cancel"] }),
+    };
+    const database = {
+      cancelCompressionJob,
+      auditApiKeyUsage: () => Promise.resolve(),
+      close: () => Promise.resolve(),
+    } as unknown as Database;
+    const { app } = await buildApp(config, {
+      database,
+      queue: { close: () => Promise.resolve() } as unknown as JobQueue,
+      storage: {} as ObjectStorage,
+      clerk: cancellationClerk,
+      rateLimiter,
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/compressions/${jobId}/cancel`,
+      headers: {
+        authorization: "Bearer test-key",
+        "idempotency-key": "cancel-job-0001",
+      },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(cancelCompressionJob).toHaveBeenCalledWith(
+      "org_test",
+      "user_test",
+      "apikey_test",
+      expect.any(String),
+      "cancel-job-0001",
+      jobId,
+    );
+  });
+
   it("lists dashboard resources through bounded tenant-scoped pages", async () => {
     const projectId = "85bd5e09-a8fb-4d2c-a560-5d2365badf84";
     const sessionClerk = {
