@@ -75,7 +75,8 @@ jobs:
               --source-root /opt/hinerv --python /opt/hinerv-venv/bin/python \
               --input /io/input.avi --output "/io/$output" --epochs 1 --channels 8
           done
-          cmp /tmp/hinerv-io/output.hnrv /tmp/hinerv-io/output-again.hnrv
+          docker run --rm --network none --read-only --mount type=bind,src=/tmp/hinerv-io,dst=/io,readonly \
+            --entrypoint /usr/bin/cmp "$IMAGE" /io/output.hnrv /io/output-again.hnrv
           docker run --rm --network none --read-only --tmpfs /tmp:rw,noexec,nosuid,size=4294967296 \
             --mount type=bind,src=/tmp/hinerv-io,dst=/io \
             --entrypoint /opt/hinerv-venv/bin/python "$IMAGE" -m smcp_worker.hinerv_runtime decode \
@@ -90,8 +91,8 @@ jobs:
           IMAGE: smcp-hinerv-runtime:${{ github.sha }}
         run: |
           set -euo pipefail
-          cp /tmp/hinerv-io/output.hnrv /tmp/hinerv-io/corrupt.hnrv
-          printf x >> /tmp/hinerv-io/corrupt.hnrv
+          docker run --rm --network none --read-only --mount type=bind,src=/tmp/hinerv-io,dst=/io \
+            --entrypoint /bin/sh "$IMAGE" -c 'cp /io/output.hnrv /io/corrupt.hnrv; printf x >> /io/corrupt.hnrv'
           if docker run --rm --network none --read-only --tmpfs /tmp:rw,noexec,nosuid,size=4294967296 \
             --mount type=bind,src=/tmp/hinerv-io,dst=/io \
             --entrypoint /opt/hinerv-venv/bin/python "$IMAGE" -m smcp_worker.hinerv_runtime decode \

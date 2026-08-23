@@ -77,7 +77,8 @@ jobs:
               --entrypoint /opt/coolchic-venv/bin/python "$IMAGE" -m smcp_worker.coolchic_runtime encode-image \
               --source-root /opt/coolchic --input /io/input.png --output "/io/$output" --iterations 1
           done
-          cmp /tmp/coolchic-io/image.cool /tmp/coolchic-io/image-again.cool
+          docker run --rm --network none --read-only --mount type=bind,src=/tmp/coolchic-io,dst=/io,readonly \
+            --entrypoint /usr/bin/cmp "$IMAGE" /io/image.cool /io/image-again.cool
           docker run --rm --network none --read-only --tmpfs /tmp:rw,noexec,nosuid,size=2147483648 \
             --mount type=bind,src=/tmp/coolchic-io,dst=/io \
             --entrypoint /opt/coolchic-venv/bin/python "$IMAGE" -m smcp_worker.coolchic_runtime decode-image \
@@ -88,7 +89,8 @@ jobs:
               --entrypoint /opt/coolchic-venv/bin/python "$IMAGE" -m smcp_worker.coolchic_runtime encode-video \
               --source-root /opt/coolchic --input /io/input.avi --output "/io/$output" --iterations 1
           done
-          cmp /tmp/coolchic-io/video.cool /tmp/coolchic-io/video-again.cool
+          docker run --rm --network none --read-only --mount type=bind,src=/tmp/coolchic-io,dst=/io,readonly \
+            --entrypoint /usr/bin/cmp "$IMAGE" /io/video.cool /io/video-again.cool
           docker run --rm --network none --read-only --tmpfs /tmp:rw,noexec,nosuid,size=2147483648 \
             --mount type=bind,src=/tmp/coolchic-io,dst=/io \
             --entrypoint /opt/coolchic-venv/bin/python "$IMAGE" -m smcp_worker.coolchic_runtime decode-video \
@@ -102,8 +104,8 @@ jobs:
           IMAGE: smcp-coolchic-runtime:${{ github.sha }}
         run: |
           set -euo pipefail
-          cp /tmp/coolchic-io/image.cool /tmp/coolchic-io/corrupt.cool
-          printf x >> /tmp/coolchic-io/corrupt.cool
+          docker run --rm --network none --read-only --mount type=bind,src=/tmp/coolchic-io,dst=/io \
+            --entrypoint /bin/sh "$IMAGE" -c 'cp /io/image.cool /io/corrupt.cool; printf x >> /io/corrupt.cool'
           if docker run --rm --network none --read-only --tmpfs /tmp:rw,noexec,nosuid,size=2147483648 \
             --mount type=bind,src=/tmp/coolchic-io,dst=/io \
             --entrypoint /opt/coolchic-venv/bin/python "$IMAGE" -m smcp_worker.coolchic_runtime decode-image \
