@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [api, worker, capsule]
+        image: [web, api, worker, capsule]
     steps:
       - name: Check out repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -33,6 +33,8 @@ jobs:
         with:
           context: .
           file: infra/docker/${{ matrix.image }}/Dockerfile
+          build-args: |
+            NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_ci_placeholder
           push: false
           load: true
           tags: smcp/${{ matrix.image }}:${{ github.sha }}

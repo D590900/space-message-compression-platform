@@ -52,7 +52,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [api, worker, capsule]
+        image: [web, api, worker, capsule]
     steps:
       - name: Check out repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -75,6 +75,7 @@ jobs:
           build-args: |
             VCS_REF=${{ github.sha }}
             VERSION=${{ github.ref_name }}
+            NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${{ vars.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
           tags: |
             ghcr.io/${{ github.repository_owner }}/smcp-${{ matrix.image }}:${{ github.ref_name }}
             ghcr.io/${{ github.repository_owner }}/smcp-${{ matrix.image }}:latest
@@ -103,6 +104,7 @@ jobs:
         run: |
           set -euo pipefail
           case "$IMAGE" in
+            web) packages=('@smcp/web') ;;
             api) packages=('@smcp/api' '@smcp/schemas') ;;
             worker) packages=('smcp-compression-worker') ;;
             capsule) packages=() ;;
