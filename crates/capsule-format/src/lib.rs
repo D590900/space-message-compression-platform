@@ -506,6 +506,7 @@ pub fn parse(input: &[u8]) -> Result<ParsedCapsule<'_>, CapsuleError> {
     if expected_offset != input.len() {
         return Err(CapsuleError::InvalidLayout);
     }
+    validate_parsed_sections(&parsed)?;
     verify_derived_sections(&parsed)?;
     Ok(ParsedCapsule {
         budget_bytes: budget,
@@ -513,6 +514,38 @@ pub fn parse(input: &[u8]) -> Result<ParsedCapsule<'_>, CapsuleError> {
         sections: parsed,
         total_bytes: total,
     })
+}
+
+fn validate_parsed_sections(sections: &[ParsedSection<'_>]) -> Result<(), CapsuleError> {
+    let codec_index = sections
+        .iter()
+        .position(|section| section.kind == SectionKind::CodecRegistry);
+    let record_index = sections
+        .iter()
+        .position(|section| section.kind == SectionKind::RecordIndex);
+    let manifest_index = sections
+        .iter()
+        .position(|section| section.kind == SectionKind::ManifestDigest);
+    let merkle_index = sections
+        .iter()
+        .position(|section| section.kind == SectionKind::MerkleRoot);
+    if codec_index.is_none() || record_index.is_none() || manifest_index.is_none() {
+        return Err(CapsuleError::NonCanonicalSections(
+            "codec registry, record index and manifest digest are required",
+        ));
+    }
+    let manifest_index = manifest_index.expect("checked above");
+    if sections[manifest_index].payload.len() != 32 {
+        return Err(CapsuleError::NonCanonicalSections(
+            "manifest digest must contain exactly 32 bytes",
+        ));
+    }
+    if merkle_index != Some(manifest_index + 1) {
+        return Err(CapsuleError::NonCanonicalSections(
+            "Merkle root must immediately follow the manifest digest",
+        ));
+    }
+    Ok(())
 }
 
 /// Parse a capsule and return its integrity summary.
@@ -730,4 +763,32 @@ fn read_u64(input: &[u8], offset: usize) -> Result<u64, CapsuleError> {
             .try_into()
             .map_err(|_| CapsuleError::Truncated)?,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parser_rejects_self_consistent_capsule_without_required_sections() {
+        let sections = vec![Section {
+            kind: SectionKind::MerkleRoot,
+            flags: 0,
+            payload: sha256(&[]).to_vec(),
+        }];
+        let options = BuildOptions {
+            budget_bytes: 1_024,
+            capsule_id: Uuid::nil(),
+            ecc_percent: 0,
+            pad_to_budget: false,
+        };
+        let encoded = encode_capsule(&sections, &options).expect("test capsule encodes");
+
+        assert!(matches!(
+            parse(&encoded),
+            Err(CapsuleError::NonCanonicalSections(
+                "codec registry, record index and manifest digest are required"
+            ))
+        ));
+    }
 }
