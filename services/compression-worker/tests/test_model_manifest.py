@@ -42,7 +42,10 @@ def test_committed_model_catalog_records_audited_neural_artifacts() -> None:
         "e119b9366d4f5e73c6ca5f31137c4ff361578bbb132953a5203afe037c4012be"
     )
     mimi = by_id["mimi"]
-    assert not mimi.enabled
+    assert mimi.enabled
+    assert mimi.decoder_image_digest == (
+        "sha256:e053c39c169accd02b775e46b6b1e344449b8207ff5c175741fc6dce69b7a8ff"
+    )
     assert mimi.license_weights == "CC-BY-4.0"
     assert mimi.license_weights_evidence is not None
     assert mimi.weights_sha256 == (
