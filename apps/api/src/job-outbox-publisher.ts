@@ -48,7 +48,7 @@ export class JobOutboxPublisher implements JobOutboxPublisherGateway {
     try {
       const now = Date.now();
       if (now - this.lastReconciledAt >= this.reconcileMilliseconds) {
-        await this.database.reconcileJobOutboxEvents(this.staleMilliseconds);
+        await this.reconcile();
         this.lastReconciledAt = now;
       }
       const claimToken = randomUUID();
@@ -56,6 +56,27 @@ export class JobOutboxPublisher implements JobOutboxPublisherGateway {
       for (const event of events) await this.publish(event, claimToken);
     } finally {
       this.running = false;
+    }
+  }
+
+  private async reconcile(): Promise<void> {
+    const candidates =
+      await this.database.findJobOutboxReconciliationCandidates(
+        this.staleMilliseconds,
+        50,
+      );
+    for (const candidate of candidates) {
+      if (
+        !(await this.queue.hasJobDelivery(
+          candidate.topic,
+          candidate.aggregate_id,
+        ))
+      ) {
+        await this.database.enqueueReconciledJobOutboxEvent(
+          candidate,
+          this.staleMilliseconds,
+        );
+      }
     }
   }
 

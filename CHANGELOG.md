@@ -27,7 +27,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - API-key authentication confirms current Clerk metadata after secret
   verification, so a revoked or expired key is rejected even if Clerk's verify
   endpoint briefly returns a pre-revocation snapshot.
-- PostgreSQL periodically reconstructs missing job outbox events for safely
-  replayable pending or retryable work after Valkey transport loss.
+- PostgreSQL reconstructs missing job outbox events for safely replayable
+  pending or retryable work only when an atomic Valkey delivery marker proves
+  that the transport record was lost.
 
 [0.1.0]: https://github.com/D590900/space-message-compression-platform/releases/tag/v0.1.0

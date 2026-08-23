@@ -6,6 +6,19 @@ import {
 } from "@opentelemetry/api";
 import { Redis } from "ioredis";
 
+const PUBLISH_JOB_SCRIPT = `
+local message_id = redis.call('XADD', KEYS[1], '*', unpack(ARGV))
+redis.call('SADD', KEYS[2], message_id)
+return message_id
+`;
+
+export function jobDeliveryMarkerKey(
+  topic: string,
+  aggregateId: string,
+): string {
+  return `smcp:job-delivery:${topic}:${aggregateId}`;
+}
+
 export class JobQueue {
   private readonly redis: Redis;
 
@@ -28,9 +41,10 @@ export class JobQueue {
     requestId?: string,
   ): Promise<void> {
     if (this.redis.status === "wait") await this.redis.connect();
-    await this.redis.xadd(
+    await this.publish(
       "smcp:compression-jobs",
-      "*",
+      "compression.requested",
+      jobId,
       "job_id",
       jobId,
       "tenant_subject",
@@ -45,9 +59,10 @@ export class JobQueue {
     requestId?: string,
   ): Promise<void> {
     if (this.redis.status === "wait") await this.redis.connect();
-    await this.redis.xadd(
+    await this.publish(
       "smcp:decompression-jobs",
-      "*",
+      "decompression.requested",
+      jobId,
       "decompression_id",
       jobId,
       "tenant_subject",
@@ -62,14 +77,40 @@ export class JobQueue {
     requestId?: string,
   ): Promise<void> {
     if (this.redis.status === "wait") await this.redis.connect();
-    await this.redis.xadd(
+    await this.publish(
       "smcp:capsule-jobs",
-      "*",
+      "capsule.requested",
+      capsuleId,
       "capsule_id",
       capsuleId,
       "tenant_subject",
       tenantSubject,
       ...queueCorrelationFields(requestId),
+    );
+  }
+
+  public async hasJobDelivery(
+    topic: string,
+    aggregateId: string,
+  ): Promise<boolean> {
+    if (this.redis.status === "wait") await this.redis.connect();
+    return (
+      (await this.redis.exists(jobDeliveryMarkerKey(topic, aggregateId))) === 1
+    );
+  }
+
+  private async publish(
+    stream: string,
+    topic: string,
+    aggregateId: string,
+    ...fields: string[]
+  ): Promise<void> {
+    await this.redis.eval(
+      PUBLISH_JOB_SCRIPT,
+      2,
+      stream,
+      jobDeliveryMarkerKey(topic, aggregateId),
+      ...fields,
     );
   }
 

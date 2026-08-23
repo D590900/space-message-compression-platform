@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { Database, JobOutboxClaim } from "../src/database.js";
+import type {
+  Database,
+  JobOutboxClaim,
+  JobOutboxReconciliationCandidate,
+} from "../src/database.js";
 import { JobOutboxPublisher } from "../src/job-outbox-publisher.js";
 import type { JobQueue } from "../src/queue.js";
 
@@ -12,20 +16,28 @@ const event: JobOutboxClaim = {
   payload: { request_id: "request-123" },
   attempt: 1,
 };
+const candidate: JobOutboxReconciliationCandidate = {
+  tenant_subject: "org_test",
+  project_id: "1bf62607-6fa8-42f8-a6f1-a660397b36cf",
+  topic: "compression.requested",
+  aggregate_id: event.aggregate_id,
+};
 
 describe("job outbox publisher", () => {
   it("publishes a claimed event and marks it complete", async () => {
     const claimJobOutboxEvents = vi.fn(() => Promise.resolve([event]));
     const completeJobOutboxEvent = vi.fn(() => Promise.resolve());
     const failJobOutboxEvent = vi.fn(() => Promise.resolve());
-    const reconcileJobOutboxEvents = vi.fn(() => Promise.resolve(0));
+    const findJobOutboxReconciliationCandidates = vi.fn(() =>
+      Promise.resolve([]),
+    );
     const publishCompression = vi.fn(() => Promise.resolve());
     const publisher = new JobOutboxPublisher(
       {
         claimJobOutboxEvents,
         completeJobOutboxEvent,
         failJobOutboxEvent,
-        reconcileJobOutboxEvents,
+        findJobOutboxReconciliationCandidates,
       } as unknown as Database,
       { publishCompression } as unknown as JobQueue,
       250,
@@ -45,7 +57,10 @@ describe("job outbox publisher", () => {
       expect.any(String),
     );
     expect(failJobOutboxEvent).not.toHaveBeenCalled();
-    expect(reconcileJobOutboxEvents).toHaveBeenCalledWith(1_800_000);
+    expect(findJobOutboxReconciliationCandidates).toHaveBeenCalledWith(
+      1_800_000,
+      50,
+    );
   });
 
   it("releases failed claims with a redacted error class", async () => {
@@ -54,7 +69,7 @@ describe("job outbox publisher", () => {
     const failJobOutboxEvent = vi.fn(() => Promise.resolve());
     const publisher = new JobOutboxPublisher(
       {
-        reconcileJobOutboxEvents: () => Promise.resolve(0),
+        findJobOutboxReconciliationCandidates: () => Promise.resolve([]),
         claimJobOutboxEvents: () => Promise.resolve([event]),
         completeJobOutboxEvent: vi.fn(() => Promise.resolve()),
         failJobOutboxEvent,
@@ -81,14 +96,19 @@ describe("job outbox publisher", () => {
   });
 
   it("reconciles at the configured cadence", async () => {
-    const reconcileJobOutboxEvents = vi.fn(() => Promise.resolve(2));
+    const findJobOutboxReconciliationCandidates = vi.fn(() =>
+      Promise.resolve([candidate]),
+    );
+    const enqueueReconciledJobOutboxEvent = vi.fn(() => Promise.resolve(true));
+    const hasJobDelivery = vi.fn(() => Promise.resolve(true));
     const claimJobOutboxEvents = vi.fn(() => Promise.resolve([]));
     const publisher = new JobOutboxPublisher(
       {
-        reconcileJobOutboxEvents,
+        findJobOutboxReconciliationCandidates,
+        enqueueReconciledJobOutboxEvent,
         claimJobOutboxEvents,
       } as unknown as Database,
-      {} as JobQueue,
+      { hasJobDelivery } as unknown as JobQueue,
       250,
       60_000,
       1_800_000,
@@ -97,7 +117,37 @@ describe("job outbox publisher", () => {
     await publisher.poll();
     await publisher.poll();
 
-    expect(reconcileJobOutboxEvents).toHaveBeenCalledTimes(1);
+    expect(findJobOutboxReconciliationCandidates).toHaveBeenCalledTimes(1);
+    expect(hasJobDelivery).toHaveBeenCalledWith(
+      candidate.topic,
+      candidate.aggregate_id,
+    );
+    expect(enqueueReconciledJobOutboxEvent).not.toHaveBeenCalled();
     expect(claimJobOutboxEvents).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-enqueues a stale PostgreSQL job only when its Valkey marker is absent", async () => {
+    const enqueueReconciledJobOutboxEvent = vi.fn(() => Promise.resolve(true));
+    const publisher = new JobOutboxPublisher(
+      {
+        findJobOutboxReconciliationCandidates: () =>
+          Promise.resolve([candidate]),
+        enqueueReconciledJobOutboxEvent,
+        claimJobOutboxEvents: () => Promise.resolve([]),
+      } as unknown as Database,
+      {
+        hasJobDelivery: () => Promise.resolve(false),
+      } as unknown as JobQueue,
+      250,
+      60_000,
+      1_800_000,
+    );
+
+    await publisher.poll();
+
+    expect(enqueueReconciledJobOutboxEvent).toHaveBeenCalledWith(
+      candidate,
+      1_800_000,
+    );
   });
 });
