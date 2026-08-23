@@ -1867,36 +1867,111 @@ export class Database {
     actorSubject: string,
     apiKeyId: string | null,
     requestId: string,
+    idempotencyKey: string,
     id: string,
   ): Promise<CompressionJobRecord> {
-    const rows = await this.sql<CompressionJobRecord[]>`
-      UPDATE compression_jobs
-      SET status = 'CANCELLED', completed_at = now()
-      WHERE tenant_subject = ${tenantSubject} AND id = ${id}
-        AND status NOT IN ('COMPLETED', 'FAILED_TERMINAL', 'CANCELLED')
-      RETURNING id, tenant_subject, project_id, input_type, profile, target_bytes,
-                status, source_object_id, selected_candidate_id, requested_at,
-                completed_at, error_code
-    `;
-    if (!rows[0]) {
-      throw new ApiProblem(
-        409,
-        "Compression job is already terminal or absent",
-        "urn:smcp:problem:invalid-state",
-      );
-    }
-    await this.audit(
-      tenantSubject,
-      rows[0].project_id,
-      actorSubject,
-      apiKeyId,
-      "compression.cancelled",
-      "compression_job",
-      id,
-      requestId,
-      "success",
-    );
-    return rows[0];
+    const route = "/v1/compressions/:id/cancel";
+    const fingerprint = this.fingerprint({ id });
+    return this.sql.begin(async (transaction) => {
+      const inserted = await transaction<{ resource_id: string }[]>`
+        INSERT INTO idempotency_records (
+          tenant_subject, route, key, request_fingerprint, resource_id,
+          external_resource_id, expires_at
+        ) VALUES (
+          ${tenantSubject}, ${route}, ${idempotencyKey}, ${fingerprint}, ${id},
+          ${id}, now() + interval '24 hours'
+        )
+        ON CONFLICT (tenant_subject, route, key) DO NOTHING
+        RETURNING resource_id
+      `;
+      if (!inserted[0]) {
+        const records = await transaction<
+          {
+            request_fingerprint: Buffer;
+            response_status: number | null;
+            resource_id: string;
+            expires_at: Date;
+          }[]
+        >`
+          SELECT request_fingerprint, response_status, resource_id, expires_at
+          FROM idempotency_records
+          WHERE tenant_subject = ${tenantSubject}
+            AND route = ${route} AND key = ${idempotencyKey}
+          FOR UPDATE
+        `;
+        const record = records[0];
+        if (!record) throw new Error("idempotency record disappeared");
+        if (record.expires_at.getTime() <= Date.now()) {
+          await transaction`
+            UPDATE idempotency_records
+            SET request_fingerprint = ${fingerprint}, response_status = NULL,
+                response_body = NULL, resource_id = ${id},
+                external_resource_id = ${id}, locked_at = now(),
+                expires_at = now() + interval '24 hours'
+            WHERE tenant_subject = ${tenantSubject}
+              AND route = ${route} AND key = ${idempotencyKey}
+          `;
+        } else {
+          if (!record.request_fingerprint.equals(fingerprint)) {
+            throw new ApiProblem(
+              409,
+              "Idempotency key was already used with a different request",
+              "urn:smcp:problem:idempotency-conflict",
+            );
+          }
+          if (record.response_status === 202) {
+            const replay = await transaction<CompressionJobRecord[]>`
+              SELECT id, tenant_subject, project_id, input_type, profile, target_bytes,
+                     status, source_object_id, selected_candidate_id, requested_at,
+                     completed_at, error_code
+              FROM compression_jobs
+              WHERE tenant_subject = ${tenantSubject} AND id = ${record.resource_id}
+            `;
+            if (!replay[0])
+              throw new Error("cancelled compression job disappeared");
+            return replay[0];
+          }
+        }
+      }
+
+      const rows = await transaction<CompressionJobRecord[]>`
+        UPDATE compression_jobs
+        SET status = 'CANCELLED', completed_at = now()
+        WHERE tenant_subject = ${tenantSubject} AND id = ${id}
+          AND status NOT IN ('COMPLETED', 'FAILED_TERMINAL', 'CANCELLED')
+        RETURNING id, tenant_subject, project_id, input_type, profile, target_bytes,
+                  status, source_object_id, selected_candidate_id, requested_at,
+                  completed_at, error_code
+      `;
+      if (!rows[0]) {
+        throw new ApiProblem(
+          409,
+          "Compression job is already terminal or absent",
+          "urn:smcp:problem:invalid-state",
+        );
+      }
+      await transaction`
+        INSERT INTO audit_events (
+          tenant_subject, project_id, actor_subject, api_key_id, action,
+          resource_type, resource_id, request_id, outcome
+        ) VALUES (
+          ${tenantSubject}, ${rows[0].project_id}, ${actorSubject}, ${apiKeyId},
+          'compression.cancelled', 'compression_job', ${id}, ${requestId}, 'success'
+        )
+      `;
+      const completed = await transaction<{ resource_id: string }[]>`
+        UPDATE idempotency_records
+        SET response_status = 202,
+            response_body = ${transaction.json({ id })},
+            external_resource_id = ${id}
+        WHERE tenant_subject = ${tenantSubject} AND route = ${route}
+          AND key = ${idempotencyKey} AND resource_id = ${id}
+        RETURNING resource_id
+      `;
+      if (!completed[0])
+        throw new Error("cancellation idempotency claim was lost");
+      return rows[0];
+    });
   }
 
   private async assertProject(
