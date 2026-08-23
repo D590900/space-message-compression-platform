@@ -40,6 +40,7 @@ RUN uv venv --python /usr/local/bin/python3.12 /opt/cod-lite-venv \
       "import torch, torchvision; import finetuned_one_step_codec.inference; assert torch.version.cuda == '12.4'" \
     && rm /tmp/cod-lite-requirements.lock \
     && rm -rf /root/.cache/uv \
+    && rm -f /usr/bin/uv /usr/bin/uvx \
     && chown -R smcp:smcp /opt/cod-lite-venv /opt/worker/src \
     && find /opt/cod-lite /opt/cod-lite-venv -type d -exec chmod 0555 {} + \
     && find /opt/cod-lite /opt/cod-lite-venv -type f -exec chmod 0444 {} + \

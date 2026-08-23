@@ -2,8 +2,8 @@
 # CoD_Lite/requirements.txt. The compiled lock targets CPython 3.12 on Linux x86_64
 # with the CUDA 12.4 PyTorch index.
 lightning==2.5.0.post0
-torch==2.5.0
-torchvision==0.20.0
+torch==2.6.0
+torchvision==0.21.0
 jsonargparse[signatures]>=4.27.7
 einops
 omegaconf
