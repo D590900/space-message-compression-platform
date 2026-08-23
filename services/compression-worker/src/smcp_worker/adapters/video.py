@@ -26,7 +26,7 @@ from smcp_worker.coolchic_runtime import VIDEO_MAGIC as COOLCHIC_VIDEO_MAGIC
 from smcp_worker.hinerv_runtime import MAGIC as HINERV_MAGIC
 from smcp_worker.liveportrait_runtime import MAGIC as LIVEPORTRAIT_MAGIC
 from smcp_worker.liveportrait_runtime import video_contract_supported
-from smcp_worker.model_manifest import ModelManifest, load_catalog
+from smcp_worker.model_manifest import ModelManifest, load_catalog, require_decoder_runtime
 from smcp_worker.models import (
     CodecCapabilities,
     EncodedCandidate,
@@ -455,10 +455,7 @@ class CoolChicVideoAdapter(Av1VideoAdapter):
 
     def decode(self, candidate: EncodedCandidate) -> bytes:
         persisted_manifest = coolchic_video_manifest_for_version(candidate.codec_version)
-        if persisted_manifest.version != self.manifest.version:
-            return CoolChicVideoAdapter(
-                manifest=persisted_manifest, source_root=self.source_root
-            ).decode(candidate)
+        require_decoder_runtime(persisted_manifest, self.manifest)
         capability = self.capabilities()
         if not capability.enabled:
             raise RuntimeError(capability.disabled_reason)
@@ -618,10 +615,7 @@ class HiNervVideoAdapter(Av1VideoAdapter):
 
     def decode(self, candidate: EncodedCandidate) -> bytes:
         persisted_manifest = hinerv_manifest_for_version(candidate.codec_version)
-        if persisted_manifest.version != self.manifest.version:
-            return HiNervVideoAdapter(
-                manifest=persisted_manifest, source_root=self.source_root
-            ).decode(candidate)
+        require_decoder_runtime(persisted_manifest, self.manifest)
         capability = self.capabilities()
         if not capability.enabled:
             raise RuntimeError(capability.disabled_reason)

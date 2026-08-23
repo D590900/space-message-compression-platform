@@ -22,7 +22,7 @@ from smcp_worker.adapters.external import (
     version_line,
 )
 from smcp_worker.coolchic_runtime import MAGIC as COOLCHIC_MAGIC
-from smcp_worker.model_manifest import ModelManifest, load_catalog
+from smcp_worker.model_manifest import ModelManifest, load_catalog, require_decoder_runtime
 from smcp_worker.models import (
     CodecCapabilities,
     EncodedCandidate,
@@ -567,10 +567,7 @@ class CoolChicImageAdapter(ImageAdapterMixin):
 
     def decode(self, candidate: EncodedCandidate) -> bytes:
         persisted_manifest = coolchic_manifest_for_version(candidate.codec_version)
-        if persisted_manifest.version != self.manifest.version:
-            return CoolChicImageAdapter(
-                manifest=persisted_manifest, source_root=self.source_root
-            ).decode(candidate)
+        require_decoder_runtime(persisted_manifest, self.manifest)
         capability = self.capabilities()
         if not capability.enabled:
             raise RuntimeError(capability.disabled_reason)

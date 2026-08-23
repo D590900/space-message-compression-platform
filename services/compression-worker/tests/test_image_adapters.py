@@ -18,7 +18,14 @@ from smcp_worker.adapters.image import (
 from smcp_worker.coolchic_runtime import KIND_IMAGE, pack_container
 from smcp_worker.coolchic_runtime import unpack_container as unpack_coolchic_container
 from smcp_worker.model_manifest import load_catalog
-from smcp_worker.models import CodecCapabilities, EncodeParams, PreparedInput, Profile, SourceObject
+from smcp_worker.models import (
+    CodecCapabilities,
+    EncodedCandidate,
+    EncodeParams,
+    PreparedInput,
+    Profile,
+    SourceObject,
+)
 
 
 @pytest.fixture
@@ -192,6 +199,9 @@ def test_coolchic_wraps_pinned_per_asset_runtime(
         }
     )
     adapter = CoolChicImageAdapter(manifest, source_root)
+    monkeypatch.setattr(
+        "smcp_worker.adapters.image.coolchic_manifest_for_version", lambda _version: manifest
+    )
     payload = pack_container(b"coolchic-bitstream", KIND_IMAGE)
 
     monkeypatch.setattr(adapter, "supports_prepared", lambda _prepared: True)
@@ -235,6 +245,48 @@ def test_coolchic_decoder_manifest_is_resolved_by_persisted_version(tmp_path: Pa
     assert resolved.version == "historical-test-vector"
     with pytest.raises(LookupError, match="persisted version"):
         coolchic_manifest_for_version("missing-version", catalog_path)
+
+
+def test_coolchic_decode_rejects_a_different_historical_runtime(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    current = next(
+        model
+        for model in load_catalog(Path("model-manifests/catalog.json")).models
+        if model.id == "coolchic-image"
+    ).model_copy(
+        update={
+            "enabled": True,
+            "disabled_reason": None,
+            "decoder_image_digest": f"sha256:{'a' * 64}",
+            "adapter_entrypoint": "smcp_worker.adapters.image:CoolChicImageAdapter",
+        }
+    )
+    historical = current.model_copy(
+        update={
+            "version": "historical-test-vector",
+            "decoder_image_digest": f"sha256:{'b' * 64}",
+        }
+    )
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    (source_root / "cc_encode.py").write_text("# encoder\n", encoding="utf-8")
+    (source_root / "cc_decode.py").write_text("# decoder\n", encoding="utf-8")
+    adapter = CoolChicImageAdapter(current, source_root)
+    monkeypatch.setattr(
+        "smcp_worker.adapters.image.coolchic_manifest_for_version",
+        lambda _version: historical,
+    )
+
+    with pytest.raises(RuntimeError, match="digest-pinned historical worker"):
+        adapter.decode(
+            EncodedCandidate(
+                current.codec_id,
+                historical.version,
+                {},
+                pack_container(b"historical", KIND_IMAGE),
+            )
+        )
 
 
 def test_coolchic_container_rejects_corruption_and_trailing_data() -> None:

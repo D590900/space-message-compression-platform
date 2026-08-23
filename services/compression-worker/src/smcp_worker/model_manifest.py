@@ -161,6 +161,18 @@ def load_catalog(path: Path) -> ModelCatalog:
     return ModelCatalog.model_validate_json(path.read_text(encoding="utf-8"))
 
 
+def require_decoder_runtime(persisted: ModelManifest, active: ModelManifest) -> None:
+    """Fail closed unless this process is the exact decoder image for a bitstream."""
+    expected = persisted.decoder_image_digest
+    actual = active.decoder_image_digest
+    if expected is None or actual is None or expected != actual:
+        raise RuntimeError(
+            f"persisted {persisted.codec_id} version {persisted.version} requires decoder "
+            f"runtime {expected or 'unpublished'}; active runtime is {actual or 'unpublished'}; "
+            "route the decode job to the digest-pinned historical worker"
+        )
+
+
 def fetch_weights(
     manifest: ModelManifest, cache_root: Path, max_bytes: int = 10_737_418_240
 ) -> Path:
