@@ -4,13 +4,16 @@ Compose is the reference single-host CPU topology and a local integration enviro
 
 ## Artifacts
 
-Release CI publishes three non-root images:
+Release CI publishes four non-root images:
 
+- `smcp-web`: Next.js Clerk-backed operator dashboard;
 - `smcp-api`: Node.js API plus the capsule planner CLI;
 - `smcp-worker`: Python codecs, verified FFmpeg build and capsule CLI;
 - `smcp-capsule`: standalone Rust inspection/build/verification CLI.
 
 Base images are pinned by digest. Candidate images must pass Trivy HIGH/CRITICAL vulnerability, secret and misconfiguration scans before publishing. Release images carry BuildKit SBOM/provenance attestations; the source release includes an archive and SHA-256 checksum.
+
+Set the GitHub Actions repository variable `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` to the production Clerk publishable key before creating a release tag. It is compiled into the public web bundle by design; the Clerk secret key remains runtime-only secret material.
 
 ## Required external services
 

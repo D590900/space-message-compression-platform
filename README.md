@@ -2,7 +2,7 @@
 
 An API-first platform for producing reproducible, quality-gated compressed artifacts and deterministic binary capsules under a strict byte budget.
 
-> **Status:** active development toward v0.1.0. The API, CPU worker, storage plane, SDKs, CLI and Rust capsule tool are executable. Live Clerk end-to-end validation and the Next.js dashboard are still required before the first release. See [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md); benchmark targets are never presented as measured results.
+> **Status:** active development toward v0.1.0. The API, Clerk-backed operator dashboard, CPU worker, storage plane, SDKs, CLI and Rust capsule tool are executable. A real Clerk development instance has passed the protected vertical slice; final-head CI, review and release gates remain. See [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md); benchmark targets are never presented as measured results.
 
 ## What is implemented
 
@@ -52,13 +52,14 @@ The production images pin their base-image digests. Do not reuse the public Comp
 
    ```console
    docker compose up --build --detach --wait
+   curl --fail http://127.0.0.1:3000/health
    curl --fail http://127.0.0.1:3001/health/ready
    docker compose ps
    ```
 
-   This starts PostgreSQL, migrations, Valkey, MinIO, API and worker. The MinIO console is bound to `127.0.0.1:19001`; the worker health/metrics port is internal only.
+   This starts the dashboard at `http://127.0.0.1:3000`, PostgreSQL, migrations, Valkey, MinIO, API and worker. MinIO's S3 endpoint is bound to `127.0.0.1:19000` so browser-facing signed URLs remain reachable; its console is at `127.0.0.1:19001`. Override `WEB_PORT`, `S3_PUBLIC_PORT`, `WEB_ORIGIN`, and `S3_PUBLIC_ENDPOINT` together when those ports are occupied. The worker health/metrics port is internal only.
 
-4. Sign in to an organization through a Clerk-enabled client, then use its session token to create a project and a scoped API key. Project and API-key administration intentionally reject standalone API keys. The API-key secret is returned once; store it in a secret manager.
+4. Open `http://127.0.0.1:3000`, sign in, and select a Clerk organization. Create a project under **Settings**, then issue a scoped credential under **API keys**. Project and API-key administration intentionally reject standalone API keys. The API-key secret is returned once; store it in a secret manager.
 
 5. Use the SDK or CLI with the issued key:
 
