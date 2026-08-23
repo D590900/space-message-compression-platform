@@ -44,8 +44,30 @@ Production deployments should pin the final worker by the digest emitted in the 
 
 Do not make the model cache writable by the serving process. Do not copy it into a container layer, CI artifact or source archive.
 
-## SNAC 24 kHz staging gate
+## SNAC 24 kHz approval and runtime
 
 The official `hubertsiuzdak/snac_24khz` checkpoint at immutable Hugging Face revision `d73ad176a12188fcf4f360ba3bf2c2fbbe8f58ec` declares MIT terms independently from the pinned MIT implementation. The catalog records the exact 79,488,254-byte weight hash and 300-byte configuration hash. The real adapter accepts canonical mono signed 16-bit PCM at 24 kHz up to 60 seconds and stores the three hierarchical 4096-entry codebooks in a bounded, versioned, canonical 12-bit token container; it never serializes tensors with pickle. Longer audio remains eligible for the Opus baseline in `ultra` mode and is not sent to the one-shot neural runtime.
 
-`.github/workflows/snac-runtime.yml` builds the CPU-only, hash-locked runtime, explicitly fetches and verifies the external checkpoint after the build, exercises a real encode/decode round trip, scans the exact image and publishes it only on manual dispatch. The catalog remains disabled until the resulting immutable runtime digest is recorded. This staging gate prevents a mutable tag or an untested decoder from becoming an advertised capability.
+`.github/workflows/snac-runtime.yml` builds the CPU-only, hash-locked runtime, explicitly fetches and verifies the external checkpoint after the build, exercises a real encode/decode round trip, scans the exact image and publishes it only on manual dispatch. Run `32649508981` published and attested the runtime as `ghcr.io/d590900/smcp-snac-runtime@sha256:1a21bda431cd81b45115819736b16f53bc12f35e7dc8e86b1c6470873292078c`; the catalog pins that immutable decoder contract.
+
+Fetch the checkpoint into an external cache as the container UID, seal files read-only, then start the derived worker with the cache mounted read-only:
+
+```console
+docker run --rm --user root \
+  --mount type=bind,source="$PWD/model-cache",target=/var/lib/smcp/models \
+  --entrypoint /bin/sh \
+  ghcr.io/d590900/smcp-snac-runtime@sha256:1a21bda431cd81b45115819736b16f53bc12f35e7dc8e86b1c6470873292078c \
+  -c 'chown smcp:smcp /var/lib/smcp/models && chmod 0700 /var/lib/smcp/models'
+docker run --rm \
+  --mount type=bind,source="$PWD/model-cache",target=/var/lib/smcp/models \
+  --entrypoint /opt/venv/bin/python \
+  ghcr.io/d590900/smcp-snac-runtime@sha256:1a21bda431cd81b45115819736b16f53bc12f35e7dc8e86b1c6470873292078c \
+  -m smcp_worker.model_manifest fetch \
+  /opt/worker/model-manifests/catalog.json snac 24khz-hf-d73ad176a121 \
+  --cache /var/lib/smcp/models
+docker run --rm \
+  --mount type=bind,source="$PWD/model-cache",target=/var/lib/smcp/models,readonly \
+  ghcr.io/d590900/smcp-worker-snac:snac-24khz
+```
+
+Production deployments must replace the convenience worker tag with the digest emitted by the `snac-worker` workflow artifact. The catalog pins the smaller runtime digest because it is the immutable decoding contract shared by derived workers.
