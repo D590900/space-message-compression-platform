@@ -54,7 +54,7 @@ jobs:
           [[ $(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.licenses" }}' "$IMAGE") == "Apache-2.0 AND MIT" ]]
           [[ $(docker image inspect --format '{{ .Config.User }}' "$IMAGE") == smcp ]]
           docker run --rm --entrypoint /opt/hinerv-venv/bin/python "$IMAGE" -c \
-            "import torch, torchac.torchac as impl; from compression.codec_utils import _safe_extract_archive; from smcp_worker.hinerv_runtime import unpack_container; assert torch.__version__ == '2.4.1+cpu'; assert impl.torchac_backend and _safe_extract_archive and unpack_container"
+            "import torch, torchac.torchac as impl; from compression.codec_utils import _safe_extract_archive; from smcp_worker.hinerv_runtime import unpack_container; assert torch.__version__ == '2.6.0+cpu'; assert impl.torchac_backend and _safe_extract_archive and unpack_container"
           docker run --rm --entrypoint /bin/sh "$IMAGE" -c \
             'test ! -e /usr/bin/g++; test ! -e /usr/bin/ninja; test ! -e /usr/bin/uv; test ! -e /usr/bin/uvx; test ! -e /var/lib/smcp/models'
       - name: Exercise deterministic offline video round trip

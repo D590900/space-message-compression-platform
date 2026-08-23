@@ -37,7 +37,7 @@ RUN uv venv --python /usr/local/bin/python3.12 /opt/hinerv-venv \
     && sed -i '/^# Load on-the-fly with ninja\.$/,/^  verbose=True)$/d' "$torchac_py" \
     && ! grep -F 'cpp_extension' "$torchac_py" \
     && /opt/hinerv-venv/bin/python -c \
-      "import torch; import torchac.torchac as impl; assert torch.__version__ == '2.4.1+cpu'; assert impl.torchac_backend"
+      "import torch; import torchac.torchac as impl; assert torch.__version__ == '2.6.0+cpu'; assert impl.torchac_backend"
 
 FROM ghcr.io/d590900/smcp-worker:v0.1.0@sha256:fc894e462bcdb09e24ad883145be645a53e30dd67d2a2a335973312d17c047c2
 ARG VCS_REF=unknown
