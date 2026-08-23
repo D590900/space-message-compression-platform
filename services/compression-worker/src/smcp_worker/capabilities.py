@@ -10,7 +10,7 @@ from smcp_worker.adapters.audio import (
 )
 from smcp_worker.adapters.image import AvifImageAdapter, CodLiteImageAdapter, JpegXlImageAdapter
 from smcp_worker.adapters.text import BrotliTextAdapter, ZstandardTextAdapter
-from smcp_worker.adapters.video import Av1VideoAdapter
+from smcp_worker.adapters.video import Av1VideoAdapter, LivePortraitVideoAdapter
 from smcp_worker.model_manifest import load_catalog
 from smcp_worker.models import CodecCapabilities, Profile
 
@@ -32,6 +32,9 @@ def _model_capabilities() -> tuple[CodecCapabilities, ...]:
             continue
         if model.id == "encodec":
             capabilities.append(EncodecAudioAdapter(manifest=model).capabilities())
+            continue
+        if model.id == "liveportrait":
+            capabilities.append(LivePortraitVideoAdapter(manifest=model).capabilities())
             continue
         if model.enabled:
             raise RuntimeError(

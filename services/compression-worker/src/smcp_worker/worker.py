@@ -50,7 +50,12 @@ from smcp_worker.adapters.text import (
     ZstandardTextAdapter,
     generate_text_candidates,
 )
-from smcp_worker.adapters.video import Av1VideoAdapter, generate_video_candidates
+from smcp_worker.adapters.video import (
+    Av1VideoAdapter,
+    LivePortraitVideoAdapter,
+    generate_video_candidates,
+    liveportrait_manifest_for_version,
+)
 from smcp_worker.capabilities import all_capabilities
 from smcp_worker.content_validation import validate_content
 from smcp_worker.models import EncodedCandidate, Profile, QualityReport, SourceObject
@@ -1021,6 +1026,15 @@ class CompressionWorker:
                 decoded = EncodecAudioAdapter(manifest=manifest).decode(candidate)
             elif candidate.codec_id == "video.av1":
                 decoded = Av1VideoAdapter().decode(candidate)
+            elif candidate.codec_id == "video.liveportrait":
+                try:
+                    manifest = liveportrait_manifest_for_version(candidate.codec_version)
+                except LookupError:
+                    self._terminal_decompression_failure(
+                        connection, decompression_id, tenant_subject, "DECODER_UNAVAILABLE"
+                    )
+                    return
+                decoded = LivePortraitVideoAdapter(manifest=manifest).decode(candidate)
             else:
                 self._terminal_decompression_failure(
                     connection, decompression_id, tenant_subject, "DECODER_UNAVAILABLE"
@@ -1255,7 +1269,9 @@ class CompressionWorker:
             "audio.opus": "audio/ogg; codecs=opus",
             "audio.snac": "application/vnd.smcp.snac",
             "audio.mimi": "application/vnd.smcp.mimi",
+            "audio.encodec": "application/vnd.smcp.encodec",
             "video.av1": "video/x-matroska; codecs=av1,opus",
+            "video.liveportrait": "application/vnd.smcp.liveportrait",
         }.get(codec_id, "application/vnd.smcp.candidate")
 
     @staticmethod
@@ -1268,7 +1284,9 @@ class CompressionWorker:
             "audio.opus": "audio/wav",
             "audio.snac": "audio/wav",
             "audio.mimi": "audio/wav",
+            "audio.encodec": "audio/wav",
             "video.av1": "video/x-msvideo; codecs=ffv1,pcm_s16le",
+            "video.liveportrait": "video/x-msvideo; codecs=ffv1,pcm_s16le",
         }.get(codec_id, "application/octet-stream")
 
     @staticmethod

@@ -67,10 +67,23 @@ def test_committed_model_catalog_records_audited_neural_artifacts() -> None:
     assert encodec.config_sha256 == (
         "4a914ed15ed5a69e19932d05b0c51f2d22c68ffac70e959a757594cb0cd6e2a7"
     )
+    liveportrait = by_id["liveportrait"]
+    assert not liveportrait.enabled
+    assert liveportrait.license_weights == "MIT"
+    assert liveportrait.license_weights_evidence is not None
+    assert liveportrait.config_sha256 == (
+        "da135e5d5104441675411caba2ededdf26606bfa8a511a2504018d2d149512c4"
+    )
+    assert [artifact.name for artifact in liveportrait.weight_artifacts] == [
+        "appearance_feature_extractor.pth",
+        "motion_extractor.pth",
+        "spade_generator.pth",
+        "warping_module.pth",
+    ]
     assert all(
         not model.enabled and model.license_weights.startswith("UNKNOWN")
         for model in catalog.models
-        if model.id not in {"cod-lite", "snac", "mimi", "encodec"}
+        if model.id in {"compressai", "mlvc", "dcvc"}
     )
 
 
@@ -167,3 +180,79 @@ def test_explicit_weight_fetch_is_hash_checked_and_read_only(
     config_destination = destination.with_name("config.yaml")
     assert config_destination.read_bytes() == config_payload
     assert stat.S_IMODE(config_destination.stat().st_mode) == 0o400
+
+
+def test_multi_artifact_fetch_verifies_each_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    bodies = {
+        "https://example.invalid/config.yaml": b"model: synthetic\n",
+        "https://example.invalid/feature.pth": b"feature weights",
+        "https://example.invalid/motion.pth": b"motion weights",
+    }
+    manifest = ModelManifest.model_validate(
+        {
+            "id": "example",
+            "codec_id": "video.example",
+            "version": "1",
+            "source": "https://example.invalid/source",
+            "code_commit": "a" * 40,
+            "license_code": "MIT",
+            "license_code_evidence": "https://example.invalid/license",
+            "license_weights": "MIT",
+            "license_weights_evidence": "https://example.invalid/weights-license",
+            "weight_artifacts": [
+                {
+                    "name": "feature.pth",
+                    "url": "https://example.invalid/feature.pth",
+                    "sha256": hashlib.sha256(bodies["https://example.invalid/feature.pth"]).hexdigest(),
+                },
+                {
+                    "name": "motion.pth",
+                    "url": "https://example.invalid/motion.pth",
+                    "sha256": hashlib.sha256(bodies["https://example.invalid/motion.pth"]).hexdigest(),
+                },
+            ],
+            "config_url": "https://example.invalid/config.yaml",
+            "config_sha256": hashlib.sha256(
+                bodies["https://example.invalid/config.yaml"]
+            ).hexdigest(),
+            "input_contract": "pre-aligned video",
+            "decoder_image_digest": f"sha256:{'d' * 64}",
+            "adapter_entrypoint": "example:Adapter",
+            "enabled": True,
+            "install_hint": "install explicitly",
+        }
+    )
+
+    class FakeResponse:
+        def __init__(self, url: str) -> None:
+            self.url = url
+            self.body = bodies[url]
+            self.headers = {"content-length": str(len(self.body))}
+
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, *_arguments: Any) -> None:
+            return None
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def iter_content(self, chunk_size: int) -> list[bytes]:
+            assert chunk_size == 1024 * 1024
+            return [self.body]
+
+    monkeypatch.setattr(requests, "get", lambda url, **_kwargs: FakeResponse(url))
+    destination = fetch_weights(manifest, tmp_path, max_bytes=1024)
+
+    assert destination.is_dir()
+    for name, expected in (
+        ("config.yaml", bodies["https://example.invalid/config.yaml"]),
+        ("feature.pth", bodies["https://example.invalid/feature.pth"]),
+        ("motion.pth", bodies["https://example.invalid/motion.pth"]),
+    ):
+        path = destination / name
+        assert path.read_bytes() == expected
+        assert stat.S_IMODE(path.stat().st_mode) == 0o400

@@ -17,6 +17,29 @@ from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
+ARTIFACT_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,119}$")
+
+
+class WeightArtifact(BaseModel):
+    """One independently hash-verified file in a multi-file checkpoint."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=120)
+    url: HttpUrl
+    sha256: str
+
+    @model_validator(mode="after")
+    def validate_artifact(self) -> Self:
+        if not ARTIFACT_NAME_PATTERN.fullmatch(self.name):
+            raise ValueError("weight artifact name must be a safe lowercase filename")
+        if self.name in {"config.yaml", "weights.bin"}:
+            raise ValueError("weight artifact name is reserved")
+        if self.url.scheme != "https":
+            raise ValueError("weight artifact URL must use HTTPS")
+        if not SHA256_PATTERN.fullmatch(self.sha256):
+            raise ValueError("weight artifact sha256 must be lowercase SHA-256")
+        return self
 
 
 class ModelManifest(BaseModel):
@@ -35,6 +58,7 @@ class ModelManifest(BaseModel):
     license_weights_evidence: HttpUrl | None = None
     weights_url: HttpUrl | None = None
     weights_sha256: str | None = None
+    weight_artifacts: tuple[WeightArtifact, ...] = ()
     config_url: HttpUrl | None = None
     config_sha256: str | None = None
     input_contract: str = Field(min_length=1, max_length=500)
@@ -67,13 +91,16 @@ class ModelManifest(BaseModel):
                 raise ValueError(f"{label} must be lowercase SHA-256")
         if (self.weights_url is None) != (self.weights_sha256 is None):
             raise ValueError("weights_url and weights_sha256 must be recorded together")
+        if self.weight_artifacts and self.weights_url is not None:
+            raise ValueError("use either a single weights URL or weight_artifacts, not both")
+        artifact_names = [artifact.name for artifact in self.weight_artifacts]
+        if len(set(artifact_names)) != len(artifact_names):
+            raise ValueError("weight artifact names must be unique")
         if (self.config_url is None) != (self.config_sha256 is None):
             raise ValueError("config_url and config_sha256 must be recorded together")
         if self.enabled:
             required = {
                 "license_weights_evidence": self.license_weights_evidence,
-                "weights_url": self.weights_url,
-                "weights_sha256": self.weights_sha256,
                 "config_url": self.config_url,
                 "config_sha256": self.config_sha256,
                 "decoder_image_digest": self.decoder_image_digest,
@@ -82,6 +109,8 @@ class ModelManifest(BaseModel):
             missing = sorted(name for name, value in required.items() if value is None)
             if missing:
                 raise ValueError(f"enabled model is missing: {', '.join(missing)}")
+            if self.weights_url is None and not self.weight_artifacts:
+                raise ValueError("enabled model is missing weights provenance")
             if self.license_weights.upper().startswith("UNKNOWN"):
                 raise ValueError("enabled model weights must have verified license terms")
             if self.disabled_reason is not None:
@@ -121,30 +150,51 @@ def fetch_weights(
         raise ValueError("max_bytes must be positive")
     if (
         not manifest.enabled
-        or manifest.weights_url is None
-        or manifest.weights_sha256 is None
         or manifest.config_url is None
         or manifest.config_sha256 is None
+        or (
+            (manifest.weights_url is None or manifest.weights_sha256 is None)
+            and not manifest.weight_artifacts
+        )
     ):
         raise ValueError("only a fully validated enabled manifest may download weights")
-    destination = cache_root / manifest.id / manifest.version / "weights.bin"
-    config_destination = destination.with_name("config.yaml")
-    destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    weights_temporary = _download_verified(
-        str(manifest.weights_url), manifest.weights_sha256, destination.parent, max_bytes
-    )
+    destination_directory = cache_root / manifest.id / manifest.version
+    destination_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    downloads: list[tuple[Path, Path]] = []
     try:
         config_temporary = _download_verified(
-            str(manifest.config_url), manifest.config_sha256, destination.parent, max_bytes
+            str(manifest.config_url),
+            manifest.config_sha256,
+            destination_directory,
+            max_bytes,
         )
+        downloads.append((config_temporary, destination_directory / "config.yaml"))
+        if manifest.weight_artifacts:
+            for artifact in manifest.weight_artifacts:
+                temporary = _download_verified(
+                    str(artifact.url), artifact.sha256, destination_directory, max_bytes
+                )
+                downloads.append((temporary, destination_directory / artifact.name))
+        else:
+            if manifest.weights_url is None or manifest.weights_sha256 is None:
+                raise AssertionError("validated single-file weights are missing")
+            temporary = _download_verified(
+                str(manifest.weights_url),
+                manifest.weights_sha256,
+                destination_directory,
+                max_bytes,
+            )
+            downloads.append((temporary, destination_directory / "weights.bin"))
     except BaseException:
-        weights_temporary.unlink(missing_ok=True)
+        for temporary, _ in downloads:
+            temporary.unlink(missing_ok=True)
         raise
-    os.chmod(weights_temporary, 0o400)
-    os.chmod(config_temporary, 0o400)
-    os.replace(config_temporary, config_destination)
-    os.replace(weights_temporary, destination)
-    return destination
+    for temporary, destination in downloads:
+        os.chmod(temporary, 0o400)
+        os.replace(temporary, destination)
+    if manifest.weight_artifacts:
+        return destination_directory
+    return destination_directory / "weights.bin"
 
 
 def _download_verified(url: str, expected_sha256: str, directory: Path, max_bytes: int) -> Path:
