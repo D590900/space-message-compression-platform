@@ -5,7 +5,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates crates
 RUN cargo build --locked --release -p smcp-capsule-cli
 
-FROM node:24.8.0-bookworm-slim@sha256:cadbfafeb6baf87eaaffa40b3640209c4b7fd38cebde65059d15bc39cd636b85 AS build
+FROM node:26.7.0-bookworm-slim@sha256:cd565714d4da3e84bfd341e31448f81d47c6362198f152345297c9c1154e6341 AS build
 ENV PNPM_HOME=/pnpm
 ENV PATH=/pnpm:$PATH
 RUN corepack enable && corepack prepare pnpm@11.6.0 --activate
@@ -21,7 +21,7 @@ RUN pnpm install --offline --frozen-lockfile --force \
     && pnpm --filter @smcp/api build \
     && pnpm --filter @smcp/api deploy --prod /opt/smcp-api
 
-FROM node:24.8.0-bookworm-slim@sha256:cadbfafeb6baf87eaaffa40b3640209c4b7fd38cebde65059d15bc39cd636b85 AS runtime
+FROM node:26.7.0-bookworm-slim@sha256:cd565714d4da3e84bfd341e31448f81d47c6362198f152345297c9c1154e6341 AS runtime
 ARG VCS_REF=unknown
 ARG VERSION=0.0.0-dev
 LABEL org.opencontainers.image.source="https://github.com/D590900/space-message-compression-platform" \
