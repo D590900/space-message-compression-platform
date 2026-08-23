@@ -54,10 +54,20 @@ def test_committed_model_catalog_records_audited_neural_artifacts() -> None:
     assert mimi.config_sha256 == (
         "aca6f44b04f7bc2e7466b71597d2d51e463ed1cf3cd7025d8848595580546c36"
     )
+    encodec = by_id["encodec"]
+    assert not encodec.enabled
+    assert encodec.license_weights == "MIT"
+    assert encodec.license_weights_evidence is not None
+    assert encodec.weights_sha256 == (
+        "47a15ffbaf7bb76176d0833e10590de0a8988a7848748608cefc36a1c88adfdc"
+    )
+    assert encodec.config_sha256 == (
+        "4a914ed15ed5a69e19932d05b0c51f2d22c68ffac70e959a757594cb0cd6e2a7"
+    )
     assert all(
         not model.enabled and model.license_weights.startswith("UNKNOWN")
         for model in catalog.models
-        if model.id not in {"cod-lite", "snac", "mimi"}
+        if model.id not in {"cod-lite", "snac", "mimi", "encodec"}
     )
 
 

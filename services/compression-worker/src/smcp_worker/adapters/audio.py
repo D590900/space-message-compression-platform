@@ -21,6 +21,7 @@ from smcp_worker.adapters.external import (
     transform,
     version_line,
 )
+from smcp_worker.encodec_runtime import MAX_SAMPLES as ENCODEC_MAX_SAMPLES
 from smcp_worker.mimi_runtime import MAX_SAMPLES as MIMI_MAX_SAMPLES
 from smcp_worker.model_manifest import ModelManifest, load_catalog
 from smcp_worker.models import (
@@ -60,6 +61,20 @@ def mimi_manifest_for_version(version: str, catalog_path: Path = MODEL_CATALOG) 
     ]
     if len(matches) != 1:
         raise LookupError(f"no unique Mimi manifest for persisted version {version!r}")
+    return matches[0]
+
+
+def encodec_manifest_for_version(
+    version: str, catalog_path: Path = MODEL_CATALOG
+) -> ModelManifest:
+    """Resolve the immutable manifest belonging to a persisted EnCodec bitstream."""
+    matches = [
+        model
+        for model in load_catalog(catalog_path).models
+        if model.codec_id == "audio.encodec" and model.version == version
+    ]
+    if len(matches) != 1:
+        raise LookupError(f"no unique EnCodec manifest for persisted version {version!r}")
     return matches[0]
 
 
@@ -578,10 +593,165 @@ class MimiAudioAdapter(OpusAudioAdapter):
         )
 
 
+class EncodecAudioAdapter(MimiAudioAdapter):
+    """Wrapper for the pinned official Meta EnCodec 48 kHz stereo checkpoint."""
+
+    def __init__(
+        self,
+        manifest: ModelManifest | None = None,
+        cache_root: Path | None = None,
+    ) -> None:
+        self.manifest = manifest or next(
+            model for model in load_catalog(MODEL_CATALOG).models if model.id == "encodec"
+        )
+        self.cache_root = cache_root or Path(
+            os.environ.get("SMCP_MODEL_CACHE", "/var/lib/smcp/models")
+        )
+        self.python_executable = os.environ.get("SMCP_ENCODEC_PYTHON", sys.executable)
+        self._verified_artifact_signature = None
+
+    def _capability(
+        self,
+        *,
+        enabled: bool,
+        disabled_reason: str | None = None,
+        install_hint: str | None = None,
+    ) -> CodecCapabilities:
+        return CodecCapabilities(
+            codec_id=self.manifest.codec_id,
+            codec_version=self.manifest.version,
+            content_types=("AUDIO",),
+            profiles=(Profile.FAITHFUL, Profile.ULTRA),
+            enabled=enabled,
+            deterministic=True,
+            disabled_reason=disabled_reason,
+            install_hint=install_hint,
+        )
+
+    def preprocess(self, source: SourceObject, profile: Profile) -> PreparedInput:
+        if not self.probe(source).accepted:
+            raise ValueError("source did not pass audio probing")
+        filters = ["aresample=48000", "alimiter=limit=0.95"]
+        if profile == Profile.ULTRA:
+            filters.insert(
+                0,
+                "silenceremove=start_periods=1:start_duration=0.1:start_threshold=-50dB:"
+                "stop_periods=-1:stop_duration=0.2:stop_threshold=-50dB",
+            )
+        canonical = transform(
+            source.data,
+            Path(source.filename).suffix or ".bin",
+            ".wav",
+            (
+                "ffmpeg",
+                "-v",
+                "error",
+                "-nostdin",
+                "-i",
+                "{input}",
+                "-vn",
+                "-map_metadata",
+                "-1",
+                "-af",
+                ",".join(filters),
+                "-ac",
+                "2",
+                "-ar",
+                "48000",
+                "-c:a",
+                "pcm_s16le",
+                "-y",
+                "{output}",
+            ),
+        )
+        return PreparedInput(source.data, canonical, "audio/wav; rate=48000; channels=2")
+
+    def _command(
+        self,
+        mode: str,
+        input_path: Path,
+        output_path: Path,
+        bandwidth: float = 3.0,
+    ) -> tuple[str, ...]:
+        command = (
+            self.python_executable,
+            "-m",
+            "smcp_worker.encodec_runtime",
+            mode,
+            "--weights",
+            str(self.model_directory / "weights.bin"),
+            "--config",
+            str(self.model_directory / "config.yaml"),
+            "--input",
+            str(input_path),
+            "--output",
+            str(output_path),
+        )
+        return command + (("--bandwidth", str(bandwidth)) if mode == "encode" else ())
+
+    @staticmethod
+    def supports_prepared(prepared: PreparedInput) -> bool:
+        if prepared.canonical_bytes is None:
+            return False
+        with wave.open(io.BytesIO(prepared.canonical_bytes), "rb") as stream:
+            return (
+                stream.getnchannels() == 2
+                and stream.getsampwidth() == 2
+                and stream.getframerate() == 48_000
+                and 0 < stream.getnframes() <= ENCODEC_MAX_SAMPLES
+            )
+
+    def encode(self, prepared: PreparedInput, params: EncodeParams) -> EncodedCandidate:
+        capability = self.capabilities()
+        if not capability.enabled or prepared.canonical_bytes is None:
+            raise RuntimeError(capability.disabled_reason or "canonical audio is missing")
+        bandwidth = params.level / 1_000
+        if bandwidth not in (3.0, 6.0, 12.0, 24.0):
+            raise ValueError("EnCodec level must select a supported target bandwidth")
+        payload = transform(
+            prepared.canonical_bytes,
+            ".wav",
+            ".encd",
+            self._command("encode", Path("{input}"), Path("{output}"), bandwidth),
+            timeout=600,
+        )
+        if not payload.startswith(b"SMCPENCD"):
+            raise ValueError("EnCodec produced an invalid token container")
+        return EncodedCandidate(
+            self.manifest.codec_id,
+            self.manifest.version,
+            {
+                "bitrate_kbps": bandwidth,
+                "sample_rate": 48_000,
+                "channels": 2,
+                "checkpoint_sha256": self.manifest.weights_sha256,
+                "config_sha256": self.manifest.config_sha256,
+            },
+            payload,
+        )
+
+    def decode(self, candidate: EncodedCandidate) -> bytes:
+        persisted_manifest = encodec_manifest_for_version(candidate.codec_version)
+        if persisted_manifest.version != self.manifest.version:
+            adapter = EncodecAudioAdapter(manifest=persisted_manifest, cache_root=self.cache_root)
+            return adapter.decode(candidate)
+        capability = self.capabilities()
+        if not capability.enabled:
+            raise RuntimeError(capability.disabled_reason)
+        return transform(
+            candidate.payload,
+            ".encd",
+            ".wav",
+            self._command("decode", Path("{input}"), Path("{output}")),
+            timeout=600,
+        )
+
+
 def _pcm_stats(payload: bytes) -> dict[str, float | int]:
     with wave.open(io.BytesIO(payload), "rb") as stream:
-        if stream.getsampwidth() != 2 or stream.getnchannels() != 1:
-            raise ValueError("quality measurement requires mono signed 16-bit PCM")
+        if stream.getsampwidth() != 2 or stream.getnchannels() not in (1, 2):
+            raise ValueError("quality measurement requires mono or stereo signed 16-bit PCM")
+        frame_count = stream.getnframes()
         frames = stream.readframes(stream.getnframes())
         sample_rate = stream.getframerate()
     samples = struct.unpack(f"<{len(frames) // 2}h", frames)
@@ -589,7 +759,7 @@ def _pcm_stats(payload: bytes) -> dict[str, float | int]:
     clipped = sum(abs(sample) >= 32767 for sample in samples)
     return {
         "samples": len(samples),
-        "duration_seconds": len(samples) / sample_rate,
+        "duration_seconds": frame_count / sample_rate,
         "peak_amplitude": peak / 32768,
         "clipped_samples": clipped,
     }
@@ -602,6 +772,7 @@ def generate_audio_candidates(
         (OpusAudioAdapter(), (12, 20, 32)),
         (SnacAudioAdapter(), (980,)),
         (MimiAudioAdapter(), (1100,)),
+        (EncodecAudioAdapter(), (3000, 6000, 12000, 24000)),
     )
     candidates: list[tuple[EncodedCandidate, QualityReport]] = []
     for adapter, levels in adapters_and_levels:
@@ -609,7 +780,7 @@ def generate_audio_candidates(
         if not capability.enabled or profile not in capability.profiles:
             continue
         prepared = adapter.preprocess(source, profile)
-        if isinstance(adapter, (SnacAudioAdapter, MimiAudioAdapter)) and not (
+        if isinstance(adapter, (SnacAudioAdapter, MimiAudioAdapter, EncodecAudioAdapter)) and not (
             adapter.supports_prepared(prepared)
         ):
             continue

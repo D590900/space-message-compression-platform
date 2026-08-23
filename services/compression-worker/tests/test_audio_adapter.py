@@ -5,9 +5,11 @@ from pathlib import Path
 import pytest
 
 from smcp_worker.adapters.audio import (
+    EncodecAudioAdapter,
     MimiAudioAdapter,
     OpusAudioAdapter,
     SnacAudioAdapter,
+    encodec_manifest_for_version,
     mimi_manifest_for_version,
     snac_manifest_for_version,
 )
@@ -250,3 +252,95 @@ def test_mimi_decoder_manifest_is_resolved_by_persisted_version(tmp_path: Path) 
     assert resolved.version == "historical-mimi-test-vector"
     with pytest.raises(LookupError, match="persisted version"):
         mimi_manifest_for_version("missing-version", catalog_path)
+
+
+def test_encodec_wraps_pinned_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    cache_root = tmp_path / "cache"
+    catalog_manifest = next(
+        model
+        for model in load_catalog(Path("model-manifests/catalog.json")).models
+        if model.id == "encodec"
+    )
+    weights = b"verified EnCodec weights"
+    config = b'{"sampling_rate": 48000, "audio_channels": 2}\n'
+    manifest = catalog_manifest.model_copy(
+        update={
+            "enabled": True,
+            "disabled_reason": None,
+            "weights_sha256": hashlib.sha256(weights).hexdigest(),
+            "config_sha256": hashlib.sha256(config).hexdigest(),
+            "decoder_image_digest": f"sha256:{'d' * 64}",
+        }
+    )
+    model_directory = cache_root / manifest.id / manifest.version
+    model_directory.mkdir(parents=True)
+    (model_directory / "weights.bin").write_bytes(weights)
+    (model_directory / "config.yaml").write_bytes(config)
+    adapter = EncodecAudioAdapter(manifest, cache_root)
+
+    def fake_transform(
+        payload: bytes,
+        input_suffix: str,
+        output_suffix: str,
+        command: tuple[str, ...],
+        *,
+        timeout: int = 300,
+    ) -> bytes:
+        assert payload
+        assert timeout == 600
+        assert command[:4] == (
+            adapter.python_executable,
+            "-m",
+            "smcp_worker.encodec_runtime",
+            "encode" if output_suffix == ".encd" else "decode",
+        )
+        if output_suffix == ".encd":
+            assert command[-2:] == ("--bandwidth", "3.0")
+            return b"SMCPENCDtokens"
+        return b"decoded-wav"
+
+    monkeypatch.setattr("smcp_worker.adapters.audio.transform", fake_transform)
+    assert adapter.capabilities().enabled
+    candidate = adapter.encode(PreparedInput(b"wav", b"wav", "audio/wav"), EncodeParams(3000))
+    assert candidate.payload == b"SMCPENCDtokens"
+    assert candidate.config["checkpoint_sha256"] == manifest.weights_sha256
+    assert candidate.config["bitrate_kbps"] == 3.0
+    assert adapter.decode(candidate) == b"decoded-wav"
+
+
+def test_encodec_rejects_tampered_cached_artifact(tmp_path: Path) -> None:
+    cache_root = tmp_path / "cache"
+    catalog_manifest = next(
+        model
+        for model in load_catalog(Path("model-manifests/catalog.json")).models
+        if model.id == "encodec"
+    )
+    manifest = catalog_manifest.model_copy(
+        update={
+            "enabled": True,
+            "disabled_reason": None,
+            "decoder_image_digest": f"sha256:{'d' * 64}",
+        }
+    )
+    model_directory = cache_root / manifest.id / manifest.version
+    model_directory.mkdir(parents=True)
+    (model_directory / "weights.bin").write_bytes(b"tampered")
+    (model_directory / "config.yaml").write_bytes(b"tampered")
+
+    capability = EncodecAudioAdapter(manifest, cache_root).capabilities()
+    assert not capability.enabled
+    assert "failed SHA-256 verification" in (capability.disabled_reason or "")
+
+
+def test_encodec_decoder_manifest_is_resolved_by_persisted_version(tmp_path: Path) -> None:
+    payload = json.loads(Path("model-manifests/catalog.json").read_text(encoding="utf-8"))
+    current = next(model for model in payload["models"] if model["id"] == "encodec")
+    payload["models"].append({**current, "version": "historical-encodec-test-vector"})
+    catalog_path = tmp_path / "catalog.json"
+    catalog_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    resolved = encodec_manifest_for_version("historical-encodec-test-vector", catalog_path)
+
+    assert resolved.version == "historical-encodec-test-vector"
+    with pytest.raises(LookupError, match="persisted version"):
+        encodec_manifest_for_version("missing-version", catalog_path)
