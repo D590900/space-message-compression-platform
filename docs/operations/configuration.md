@@ -58,7 +58,7 @@ The default capsule budget is 2,000,000 bytes. `pad_to_budget` is opt-in. The da
 
 ## Optional codecs
 
-CoD-Lite, SNAC and Mimi are enabled only in their optional digest-pinned workers after an operator places the explicitly fetched, checksum-verified artifacts in the immutable model cache. Other neural adapters remain disabled until their manifests and runtimes are approved. No application path downloads weights.
+CoD-Lite, SNAC, Mimi and EnCodec are enabled only in their optional digest-pinned workers after an operator places the explicitly fetched, checksum-verified artifacts in the immutable model cache. Other neural adapters remain disabled until their manifests and runtimes are approved. No application path downloads weights.
 
 The `semantic` profile remains part of the versioned API vocabulary, but job creation returns `422 semantic-profile-unavailable` until an enabled implementation includes its verified decoder and immutable weights in the reproducibility chain. The worker also terminalizes legacy queued semantic jobs with `SEMANTIC_PROFILE_UNAVAILABLE`; it never substitutes a baseline codec while claiming semantic reconstruction.
 
