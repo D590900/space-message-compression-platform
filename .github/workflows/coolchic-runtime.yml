@@ -56,7 +56,7 @@ jobs:
           docker run --rm --entrypoint /opt/coolchic-venv/bin/python "$IMAGE" -c \
             "import torch; from coolchic.bitstream.decode import decode_video; from smcp_worker.coolchic_runtime import unpack_container; assert torch.__version__ == '2.11.0+cpu'; assert decode_video and unpack_container"
           docker run --rm --entrypoint /bin/sh "$IMAGE" -c \
-            'test ! -e /usr/bin/uv; test ! -e /usr/bin/uvx; test ! -e /var/lib/smcp/models; ! find /opt/coolchic -iname "*raft*" | grep .'
+            'test ! -e /usr/bin/uv; test ! -e /usr/bin/uvx; test ! -e /var/lib/smcp/models; ! find /opt/coolchic -type f \( -name "*.pth" -o -name "*.pt" -o -name "*.ckpt" \) | grep .'
       - name: Exercise deterministic offline image and video round trips
         env:
           IMAGE: smcp-coolchic-runtime:${{ github.sha }}
