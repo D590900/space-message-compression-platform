@@ -177,12 +177,13 @@ jobs:
           set -euo pipefail
           source_archive="smcp-${GITHUB_REF_NAME}.tar.gz"
           git archive --format=tar.gz --prefix=space-message-compression-platform/ -o "$source_archive" HEAD
-          artifacts=("$source_archive" sboms/*.spdx.json)
+          cp sboms/*.spdx.json .
+          artifacts=("$source_archive" smcp-*.spdx.json)
           sha256sum "${artifacts[@]}" > SHA256SUMS
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          artifacts=("smcp-${GITHUB_REF_NAME}.tar.gz" SHA256SUMS sboms/*.spdx.json)
+          artifacts=("smcp-${GITHUB_REF_NAME}.tar.gz" SHA256SUMS smcp-*.spdx.json)
           gh release create "$GITHUB_REF_NAME" "${artifacts[@]}" --generate-notes --verify-tag
