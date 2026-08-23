@@ -97,8 +97,9 @@ describe("capsule planning", () => {
             artifact_id: artifactId,
             codec_id: "text.zstandard",
             codec_version: "0.25.0",
-            payload_bytes: 500,
-            container_overhead_bytes: 0,
+            // Production PostgreSQL BIGINT values arrive as strings.
+            payload_bytes: "500" as unknown as number,
+            container_overhead_bytes: "0" as unknown as number,
           },
         ]),
       createCapsulePlan,
@@ -182,8 +183,9 @@ describe("capsule planning", () => {
           tenant_subject: "org_test",
           project_id: projectId,
           plan_id: "60000000-0000-0000-0000-000000000006",
-          budget_bytes: 2_000_000,
-          actual_bytes: 649,
+          // Production PostgreSQL BIGINT values arrive as strings.
+          budget_bytes: "2000000" as unknown as number,
+          actual_bytes: "649" as unknown as number,
           object_key: "org_test/project/capsules/test.smcp",
           sha256_hex: "ab".repeat(32),
           merkle_root_hex: "cd".repeat(32),

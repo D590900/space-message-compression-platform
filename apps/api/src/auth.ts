@@ -112,7 +112,8 @@ export class ProductionClerkGateway implements ClerkGateway {
     return this.client.apiKeys.list({
       subject,
       includeInvalid: true,
-      limit: 500,
+      // Clerk's Backend API caps API-key list pages at 100 records.
+      limit: 100,
     });
   }
 

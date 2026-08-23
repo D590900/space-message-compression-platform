@@ -339,8 +339,14 @@ export async function buildApp(
         id: item.job_id,
         required: item.required,
         candidates: (byJob.get(item.job_id) ?? []).map((candidate) => {
-          const streamBytes =
-            candidate.payload_bytes + candidate.container_overhead_bytes + 10;
+          // postgres.js returns BIGINT columns as strings to preserve precision.
+          // These values are bounded well below Number.MAX_SAFE_INTEGER by the
+          // upload and capsule schemas, so normalize before doing byte math.
+          const payloadBytes = Number(candidate.payload_bytes);
+          const containerOverheadBytes = Number(
+            candidate.container_overhead_bytes,
+          );
+          const streamBytes = payloadBytes + containerOverheadBytes + 10;
           const eccBytes =
             parityShards > 0 ? Math.ceil(streamBytes / 10) * parityShards : 0;
           return {
@@ -365,7 +371,7 @@ export async function buildApp(
         content_type: candidate?.input_type ?? null,
         codec_id: candidate?.codec_id ?? null,
         codec_version: candidate?.codec_version ?? null,
-        payload_bytes: candidate?.payload_bytes ?? 0,
+        payload_bytes: Number(candidate?.payload_bytes ?? 0),
       };
     });
     const result = await dependencies.database.createCapsulePlan(
@@ -434,12 +440,14 @@ export async function buildApp(
         "urn:smcp:problem:invalid-state",
       );
     }
+    const actualBytes = Number(capsule.actual_bytes);
+    const budgetBytes = Number(capsule.budget_bytes);
     return {
       valid: true,
       capsule_id: capsule.id,
-      actual_bytes: capsule.actual_bytes,
-      budget_bytes: capsule.budget_bytes,
-      within_budget: capsule.actual_bytes <= capsule.budget_bytes,
+      actual_bytes: actualBytes,
+      budget_bytes: budgetBytes,
+      within_budget: actualBytes <= budgetBytes,
       sha256: capsule.sha256_hex,
       merkle_root: capsule.merkle_root_hex,
       format: `${capsule.format_major}.${capsule.format_minor}`,
