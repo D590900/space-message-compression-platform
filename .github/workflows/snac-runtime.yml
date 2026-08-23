@@ -97,7 +97,8 @@ jobs:
             --entrypoint /opt/snac-venv/bin/python "$IMAGE" \
             -m smcp_worker.snac_runtime encode --weights /model/weights.bin \
             --config /model/config.yaml --input /io/input.wav --output /io/output-again.snac
-          cmp /tmp/snac-io/output.snac /tmp/snac-io/output-again.snac
+          docker run --rm --mount type=bind,src=/tmp/snac-io,dst=/io \
+            --entrypoint /usr/bin/cmp "$IMAGE" /io/output.snac /io/output-again.snac
           docker run --rm \
             --mount type=bind,src=/tmp/snac-model,dst=/model,readonly \
             --mount type=bind,src=/tmp/snac-io,dst=/io \
@@ -107,7 +108,9 @@ jobs:
           docker run --rm --mount type=bind,src=/tmp/snac-io,dst=/io \
             --entrypoint /usr/local/bin/ffprobe "$IMAGE" -v error -show_entries \
             stream=sample_rate,channels,duration -of json /io/decoded.wav
-          test $(stat -c %s /tmp/snac-io/output.snac) -lt $(stat -c %s /tmp/snac-io/input.wav)
+          docker run --rm --mount type=bind,src=/tmp/snac-io,dst=/io \
+            --entrypoint /bin/sh "$IMAGE" -c \
+            'test "$(stat -c %s /io/output.snac)" -lt "$(stat -c %s /io/input.wav)"'
       - name: Scan candidate image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
