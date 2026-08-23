@@ -24,7 +24,7 @@ dependencies = [
 [dependency-groups]
 dev = [
   "boto3-stubs[s3]>=1.43,<2",
-  "mypy>=1.19,<2",
+  "mypy>=1.19,<3",
   "pytest>=9.0,<10",
   "pytest-cov>=7.0,<8",
   "ruff>=0.15,<1",
