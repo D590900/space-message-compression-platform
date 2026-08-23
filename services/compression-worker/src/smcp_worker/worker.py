@@ -28,9 +28,11 @@ from smcp_worker.adapters import image as image_module
 from smcp_worker.adapters import text as text_module
 from smcp_worker.adapters import video as video_module
 from smcp_worker.adapters.audio import (
+    MimiAudioAdapter,
     OpusAudioAdapter,
     SnacAudioAdapter,
     generate_audio_candidates,
+    mimi_manifest_for_version,
     snac_manifest_for_version,
 )
 from smcp_worker.adapters.external import run
@@ -997,6 +999,15 @@ class CompressionWorker:
                     )
                     return
                 decoded = SnacAudioAdapter(manifest=manifest).decode(candidate)
+            elif candidate.codec_id == "audio.mimi":
+                try:
+                    manifest = mimi_manifest_for_version(candidate.codec_version)
+                except LookupError:
+                    self._terminal_decompression_failure(
+                        connection, decompression_id, tenant_subject, "DECODER_UNAVAILABLE"
+                    )
+                    return
+                decoded = MimiAudioAdapter(manifest=manifest).decode(candidate)
             elif candidate.codec_id == "video.av1":
                 decoded = Av1VideoAdapter().decode(candidate)
             else:
@@ -1232,6 +1243,7 @@ class CompressionWorker:
             "image.jpeg-xl": "image/jxl",
             "audio.opus": "audio/ogg; codecs=opus",
             "audio.snac": "application/vnd.smcp.snac",
+            "audio.mimi": "application/vnd.smcp.mimi",
             "video.av1": "video/x-matroska; codecs=av1,opus",
         }.get(codec_id, "application/vnd.smcp.candidate")
 
@@ -1244,6 +1256,7 @@ class CompressionWorker:
             "image.jpeg-xl": "image/png",
             "audio.opus": "audio/wav",
             "audio.snac": "audio/wav",
+            "audio.mimi": "audio/wav",
             "video.av1": "video/x-msvideo; codecs=ffv1,pcm_s16le",
         }.get(codec_id, "application/octet-stream")
 

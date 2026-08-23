@@ -41,10 +41,20 @@ def test_committed_model_catalog_records_audited_neural_artifacts() -> None:
     assert snac.config_sha256 == (
         "e119b9366d4f5e73c6ca5f31137c4ff361578bbb132953a5203afe037c4012be"
     )
+    mimi = by_id["mimi"]
+    assert not mimi.enabled
+    assert mimi.license_weights == "CC-BY-4.0"
+    assert mimi.license_weights_evidence is not None
+    assert mimi.weights_sha256 == (
+        "bac7e85083dcded655d24eaadde7e6eea34c0da1b35fa2d284e641bd2b942a5e"
+    )
+    assert mimi.config_sha256 == (
+        "aca6f44b04f7bc2e7466b71597d2d51e463ed1cf3cd7025d8848595580546c36"
+    )
     assert all(
         not model.enabled and model.license_weights.startswith("UNKNOWN")
         for model in catalog.models
-        if model.id not in {"cod-lite", "snac"}
+        if model.id not in {"cod-lite", "snac", "mimi"}
     )
 
 

@@ -1,0 +1,4 @@
+# Transformers v4.56.2 is pinned to commit cd74917ffc3e8f84e4a886052c5ab32b7ac623cc.
+torch==2.6.0
+transformers==4.56.2
+safetensors==0.6.2
