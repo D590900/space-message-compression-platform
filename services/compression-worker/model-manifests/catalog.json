@@ -70,10 +70,10 @@
       "config_url": "https://huggingface.co/kyutai/mimi/resolve/89091b3e466eb6a9d11e537bf26b144f194978f7/config.json",
       "config_sha256": "aca6f44b04f7bc2e7466b71597d2d51e463ed1cf3cd7025d8848595580546c36",
       "input_contract": "Mono signed 16-bit PCM at 24 kHz, maximum 30 seconds; eight 2048-entry codebooks at 12.5 Hz (1.1 kbps), packed canonically as 11-bit tokens with the original sample count",
+      "decoder_image_digest": "sha256:e053c39c169accd02b775e46b6b1e344449b8207ff5c175741fc6dce69b7a8ff",
       "adapter_entrypoint": "smcp_worker.adapters.audio:MimiAudioAdapter",
-      "enabled": false,
-      "disabled_reason": "The approved checkpoint and real adapter are ready, but the immutable decoder runtime has not been published and pinned yet",
-      "install_hint": "Publish the scanned Mimi runtime, record its digest, then enable this manifest in the derived worker"
+      "enabled": true,
+      "install_hint": "Use the digest-pinned Mimi CPU worker and mount the explicitly fetched model cache read-only"
     },
     {
       "id": "encodec",

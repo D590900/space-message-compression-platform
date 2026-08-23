@@ -14,7 +14,7 @@ An API-first platform for producing reproducible, quality-gated compressed artif
 - TypeScript and Python SDKs, a JSON-output CLI, versioned OpenAPI, synthetic benchmarks and golden vectors.
 - Non-root, read-only runtime containers; full-history secret scanning, dependency scanning, image scanning, SBOMs and release provenance in CI.
 
-CoD-Lite and SNAC 24 kHz are available through optional digest-pinned CUDA and CPU workers. Their weights are fetched explicitly into an external verified cache and are never bundled or downloaded implicitly. Mimi 24 kHz has approved checkpoint terms and a real CPU adapter, but remains disabled until its scanned runtime is published and pinned. Other neural codecs remain disabled until their checkpoint-specific terms and runtime artifacts are approved.
+CoD-Lite, SNAC 24 kHz and Mimi 24 kHz are available through optional digest-pinned CUDA and CPU workers. Their weights are fetched explicitly into an external verified cache and are never bundled or downloaded implicitly. Other neural codecs remain disabled until their checkpoint-specific terms and runtime artifacts are approved.
 
 ## Repository map
 

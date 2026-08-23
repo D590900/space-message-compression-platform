@@ -72,10 +72,30 @@ docker run --rm \
 
 Production deployments must replace the convenience worker tag with the digest emitted by the `snac-worker` workflow artifact. The catalog pins the smaller runtime digest because it is the immutable decoding contract shared by derived workers.
 
-## Mimi 24 kHz approval and staging gate
+## Mimi 24 kHz approval and runtime
 
 The official `kyutai/mimi` checkpoint at immutable Hugging Face revision `89091b3e466eb6a9d11e537bf26b144f194978f7` declares CC-BY-4.0 terms. Its real adapter uses the Apache-2.0 Transformers 5.5.0 implementation pinned to commit `c1c34249fa27deefbd4a377dfbf883a39baf5c6d`, accepts canonical mono signed 16-bit PCM at 24 kHz up to 30 seconds, and stores eight 2048-entry codebooks at 12.5 Hz in a bounded, versioned, canonical 11-bit token container. It loads the exact 384,649,828-byte `safetensors` checkpoint without pickle.
 
-The CPU-only runtime has a hash-locked dependency graph and keeps the checkpoint external. Local Linux/amd64 validation verified both declared artifact hashes, deterministic double encoding, a real decode to exactly 24 kHz mono with the original 0.5-second duration, and a 99-byte canonical token payload for a 24,078-byte PCM test input. `.github/workflows/mimi-runtime.yml` repeats these gates, scans the exact image and publishes only on manual dispatch.
+The CPU-only runtime has a hash-locked dependency graph and keeps the checkpoint external. Local Linux/amd64 validation verified both declared artifact hashes, deterministic double encoding, a real decode to exactly 24 kHz mono with the original 0.5-second duration, and a 99-byte canonical token payload for a 24,078-byte PCM test input. `.github/workflows/mimi-runtime.yml` repeats these gates and scans the exact image. Run `32652654491` published and attested `ghcr.io/d590900/smcp-mimi-runtime@sha256:e053c39c169accd02b775e46b6b1e344449b8207ff5c175741fc6dce69b7a8ff`; the catalog pins that immutable decoder contract.
 
-Mimi intentionally remains disabled in the catalog until that workflow has published and attested the runtime and its immutable digest has been recorded. A separate derived-worker workflow and operator fetch instructions will be added in the activation change; this avoids claiming availability from an unpinned local build.
+Fetch the checkpoint into an external cache as the container UID, seal files read-only, then start the derived worker with the cache mounted read-only:
+
+```console
+docker run --rm --user root \
+  --mount type=bind,source="$PWD/model-cache",target=/var/lib/smcp/models \
+  --entrypoint /bin/sh \
+  ghcr.io/d590900/smcp-worker-mimi:mimi-24khz \
+  -c 'chown smcp:smcp /var/lib/smcp/models && chmod 0700 /var/lib/smcp/models'
+docker run --rm \
+  --mount type=bind,source="$PWD/model-cache",target=/var/lib/smcp/models \
+  --entrypoint /opt/venv/bin/python \
+  ghcr.io/d590900/smcp-worker-mimi:mimi-24khz \
+  -m smcp_worker.model_manifest fetch \
+  /opt/worker/model-manifests/catalog.json mimi 24khz-hf-89091b3e466e \
+  --cache /var/lib/smcp/models
+docker run --rm \
+  --mount type=bind,source="$PWD/model-cache",target=/var/lib/smcp/models,readonly \
+  ghcr.io/d590900/smcp-worker-mimi:mimi-24khz
+```
+
+Production deployments must replace the convenience worker tag with the digest emitted by the `mimi-worker` workflow artifact. The catalog pins the smaller runtime digest because it is the immutable decoding contract shared by derived workers.
