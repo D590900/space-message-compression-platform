@@ -56,12 +56,12 @@ Fetch the checkpoint into an external cache as the container UID, seal files rea
 docker run --rm --user root \
   --mount type=bind,source="$PWD/model-cache",target=/var/lib/smcp/models \
   --entrypoint /bin/sh \
-  ghcr.io/d590900/smcp-snac-runtime@sha256:1a21bda431cd81b45115819736b16f53bc12f35e7dc8e86b1c6470873292078c \
+  ghcr.io/d590900/smcp-worker-snac:snac-24khz \
   -c 'chown smcp:smcp /var/lib/smcp/models && chmod 0700 /var/lib/smcp/models'
 docker run --rm \
   --mount type=bind,source="$PWD/model-cache",target=/var/lib/smcp/models \
   --entrypoint /opt/venv/bin/python \
-  ghcr.io/d590900/smcp-snac-runtime@sha256:1a21bda431cd81b45115819736b16f53bc12f35e7dc8e86b1c6470873292078c \
+  ghcr.io/d590900/smcp-worker-snac:snac-24khz \
   -m smcp_worker.model_manifest fetch \
   /opt/worker/model-manifests/catalog.json snac 24khz-hf-d73ad176a121 \
   --cache /var/lib/smcp/models
