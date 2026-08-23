@@ -2,7 +2,7 @@
 
 An API-first platform for producing reproducible, quality-gated compressed artifacts and deterministic binary capsules under a strict byte budget.
 
-> **Status:** v0.1.0 release candidate. The initial implementation is merged to `main`; the API, Clerk-backed operator dashboard, CPU worker, storage plane, SDKs, CLI and Rust capsule tool are executable. A real Clerk development instance has passed both the vertical slice and the automated API-key lifecycle test. Final candidate CI, exact-image audit and tagging remain. See [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md); benchmark targets are never presented as measured results.
+> **Status:** v0.1.0 is released. The API, Clerk-backed operator dashboard, CPU worker, storage plane, SDKs, CLI and Rust capsule tool are executable. A real Clerk development instance passed both the vertical slice and the automated API-key lifecycle test. See [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md); benchmark targets are never presented as measured results.
 
 ## What is implemented
 
@@ -14,7 +14,7 @@ An API-first platform for producing reproducible, quality-gated compressed artif
 - TypeScript and Python SDKs, a JSON-output CLI, versioned OpenAPI, synthetic benchmarks and golden vectors.
 - Non-root, read-only runtime containers; full-history secret scanning, dependency scanning, image scanning, SBOMs and release provenance in CI.
 
-Optional neural codecs are disabled. Their code revisions are pinned, but no weights are bundled or downloaded implicitly; unknown or incompatible weight terms fail closed.
+CoD-Lite is available through the optional digest-pinned CUDA worker. Its weights are fetched explicitly into an external verified cache and are never bundled or downloaded implicitly. Other neural codecs remain disabled until their checkpoint-specific terms and runtime artifacts are approved.
 
 ## Repository map
 

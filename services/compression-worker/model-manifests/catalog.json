@@ -30,10 +30,10 @@
       "config_url": "https://huggingface.co/zhaoyangjia/CoD_Lite/resolve/cfda8135320ff0bc7dfdf4e68c8e737ea07a5d64/CoD_Lite_bpp_0_0312.yaml",
       "config_sha256": "af69be08f74378e3b3a9ef5d8b629a5e8acc49b0754282deba27d31adc3c70e4",
       "input_contract": "One RGB PNG/JPEG image; upstream converts with Pillow/to_tensor, stores uint16 width/height and uses the 0.0312-bpp, ds=16, 8-bit-codebook configuration",
+      "decoder_image_digest": "sha256:791454206faacd38b9b4126f89a998a2d2ff9761f8cd1dcdc81e7030022035cf",
       "adapter_entrypoint": "smcp_worker.adapters.image:CodLiteImageAdapter",
-      "enabled": false,
-      "disabled_reason": "Weights and adapter are approved, but the pinned CUDA decoder image has not been packaged and verified",
-      "install_hint": "Build and publish the pinned GenCodec CUDA runtime, then record its immutable image digest before enabling"
+      "enabled": true,
+      "install_hint": "Use the digest-pinned CoD-Lite worker image with an NVIDIA CUDA 12.4-compatible host and mount the explicitly fetched model cache read-only"
     },
     {
       "id": "snac",
