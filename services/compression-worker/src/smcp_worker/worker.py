@@ -21,7 +21,7 @@ from botocore.config import Config
 from opentelemetry import propagate, trace
 from psycopg.rows import dict_row
 from redis import Redis
-from redis.exceptions import ResponseError
+from redis.exceptions import RedisError, ResponseError
 
 from smcp_worker.adapters import audio as audio_module
 from smcp_worker.adapters import image as image_module
@@ -157,28 +157,35 @@ class CompressionWorker:
         if on_ready is not None:
             on_ready()
         while True:
-            self._delete_due_originals()
-            messages = self._claim_stale_messages()
-            if not messages:
-                messages = cast(
-                    list[tuple[str, list[tuple[str, dict[str, str]]]]],
-                    self.redis.xreadgroup(
-                        self.settings.worker_group,
-                        self.settings.worker_consumer_name,
-                        {
-                            COMPRESSION_STREAM: ">",
-                            DECOMPRESSION_STREAM: ">",
-                            CAPSULE_STREAM: ">",
-                        },
-                        count=1,
-                        block=self.settings.worker_block_ms,
-                    ),
-                )
-            for queue in (COMPRESSION_STREAM, DECOMPRESSION_STREAM, CAPSULE_STREAM):
-                QUEUE_DEPTH.labels(queue=queue).set(self._queue_backlog(queue))
-            for stream, entries in messages:
-                for message_id, fields in entries:
-                    self.process_message(stream, message_id, fields)
+            try:
+                self._run_cycle()
+            except RedisError:
+                LOGGER.warning("queue connection interrupted; retrying", exc_info=True)
+                time.sleep(1)
+
+    def _run_cycle(self) -> None:
+        self._delete_due_originals()
+        messages = self._claim_stale_messages()
+        if not messages:
+            messages = cast(
+                list[tuple[str, list[tuple[str, dict[str, str]]]]],
+                self.redis.xreadgroup(
+                    self.settings.worker_group,
+                    self.settings.worker_consumer_name,
+                    {
+                        COMPRESSION_STREAM: ">",
+                        DECOMPRESSION_STREAM: ">",
+                        CAPSULE_STREAM: ">",
+                    },
+                    count=1,
+                    block=self.settings.worker_block_ms,
+                ),
+            )
+        for queue in (COMPRESSION_STREAM, DECOMPRESSION_STREAM, CAPSULE_STREAM):
+            QUEUE_DEPTH.labels(queue=queue).set(self._queue_backlog(queue))
+        for stream, entries in messages:
+            for message_id, fields in entries:
+                self.process_message(stream, message_id, fields)
 
     def _claim_stale_messages(
         self,

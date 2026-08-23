@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from redis.exceptions import RedisError
 
 from smcp_worker.settings import Settings
 from smcp_worker.worker import (
@@ -58,6 +59,23 @@ def test_claims_stale_pending_messages_from_every_stream() -> None:
         CAPSULE_STREAM,
     ]
     assert all(call.kwargs == {"count": 7} for call in worker.redis.xautoclaim.call_args_list)
+
+
+def test_worker_retries_after_queue_connection_interrupt(monkeypatch: pytest.MonkeyPatch) -> None:
+    worker = bare_worker()
+    worker.ensure_groups = MagicMock()  # type: ignore[method-assign]
+    worker._run_cycle = MagicMock(  # type: ignore[method-assign]
+        side_effect=[RedisError("queue unavailable"), KeyboardInterrupt]
+    )
+    sleep = MagicMock()
+    monkeypatch.setattr("smcp_worker.worker.time.sleep", sleep)
+
+    with pytest.raises(KeyboardInterrupt):
+        worker.run_forever()
+
+    worker.ensure_groups.assert_called_once()
+    assert worker._run_cycle.call_count == 2
+    sleep.assert_called_once_with(1)
 
 
 @pytest.mark.parametrize("terminal,expected_ack_count", [(False, 0), (True, 1)])
