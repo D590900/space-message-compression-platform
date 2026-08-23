@@ -123,7 +123,13 @@ export async function buildApp(
       ),
     jobOutboxPublisher:
       overrides.jobOutboxPublisher ??
-      new JobOutboxPublisher(database, queue, config.JOB_OUTBOX_POLL_MS),
+      new JobOutboxPublisher(
+        database,
+        queue,
+        config.JOB_OUTBOX_POLL_MS,
+        config.JOB_OUTBOX_RECONCILE_MS,
+        config.JOB_OUTBOX_STALE_MS,
+      ),
   };
   dependencies.keyRotationScheduler.start();
   dependencies.webhookDispatcher.start();

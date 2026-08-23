@@ -2,7 +2,7 @@
 
 An API-first platform for producing reproducible, quality-gated compressed artifacts and deterministic binary capsules under a strict byte budget.
 
-> **Status:** active development toward v0.1.0. The API, Clerk-backed operator dashboard, CPU worker, storage plane, SDKs, CLI and Rust capsule tool are executable. A real Clerk development instance has passed the protected vertical slice; final-head CI, review and release gates remain. See [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md); benchmark targets are never presented as measured results.
+> **Status:** v0.1.0 release candidate. The initial implementation is merged to `main`; the API, Clerk-backed operator dashboard, CPU worker, storage plane, SDKs, CLI and Rust capsule tool are executable. A real Clerk development instance has passed both the vertical slice and the automated API-key lifecycle test. Final candidate CI, exact-image audit and tagging remain. See [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md); benchmark targets are never presented as measured results.
 
 ## What is implemented
 

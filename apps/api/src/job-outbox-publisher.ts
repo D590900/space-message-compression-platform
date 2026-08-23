@@ -11,11 +11,14 @@ export interface JobOutboxPublisherGateway {
 export class JobOutboxPublisher implements JobOutboxPublisherGateway {
   private timer: NodeJS.Timeout | undefined;
   private running = false;
+  private lastReconciledAt = 0;
 
   public constructor(
     private readonly database: Database,
     private readonly queue: JobQueue,
     private readonly pollMilliseconds: number,
+    private readonly reconcileMilliseconds: number,
+    private readonly staleMilliseconds: number,
   ) {}
 
   public start(): void {
@@ -43,6 +46,11 @@ export class JobOutboxPublisher implements JobOutboxPublisherGateway {
     if (this.running) return;
     this.running = true;
     try {
+      const now = Date.now();
+      if (now - this.lastReconciledAt >= this.reconcileMilliseconds) {
+        await this.database.reconcileJobOutboxEvents(this.staleMilliseconds);
+        this.lastReconciledAt = now;
+      }
       const claimToken = randomUUID();
       const events = await this.database.claimJobOutboxEvents(claimToken, 50);
       for (const event of events) await this.publish(event, claimToken);
