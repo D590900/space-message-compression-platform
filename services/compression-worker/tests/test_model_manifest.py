@@ -29,7 +29,10 @@ def test_committed_model_catalog_records_audited_neural_artifacts() -> None:
         "af69be08f74378e3b3a9ef5d8b629a5e8acc49b0754282deba27d31adc3c70e4"
     )
     snac = by_id["snac"]
-    assert not snac.enabled
+    assert snac.enabled
+    assert snac.decoder_image_digest == (
+        "sha256:1a21bda431cd81b45115819736b16f53bc12f35e7dc8e86b1c6470873292078c"
+    )
     assert snac.license_weights == "MIT"
     assert snac.license_weights_evidence is not None
     assert snac.weights_sha256 == (
