@@ -169,4 +169,4 @@ docker run --rm \
   ghcr.io/d590900/smcp-worker-liveportrait:liveportrait-human
 ```
 
-Production deployments must replace the convenience worker tag with the exact digest emitted by the `liveportrait-worker` workflow artifact. The catalog pins the smaller runtime digest because it is the immutable decoding contract shared by derived workers; no worker tag is treated as provenance evidence.
+Production deployments must replace the convenience worker tag with the exact digest from run `32661723645`: `ghcr.io/d590900/smcp-worker-liveportrait@sha256:ae9af1a901b5e270f50ad4cd850eea39378a89146ff047ce1043421f666fee74`. The downloaded workflow artifact matched the GHCR manifest digest, contained a valid SPDX 2.3 SBOM, and passed independent OCI provenance and SPDX SBOM attestation verification. The catalog pins the smaller runtime digest because it is the immutable decoding contract shared by derived workers; no worker tag is treated as provenance evidence.
