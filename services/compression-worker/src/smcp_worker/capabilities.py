@@ -8,9 +8,19 @@ from smcp_worker.adapters.audio import (
     OpusAudioAdapter,
     SnacAudioAdapter,
 )
-from smcp_worker.adapters.image import AvifImageAdapter, CodLiteImageAdapter, JpegXlImageAdapter
+from smcp_worker.adapters.image import (
+    AvifImageAdapter,
+    CodLiteImageAdapter,
+    CoolChicImageAdapter,
+    JpegXlImageAdapter,
+)
 from smcp_worker.adapters.text import BrotliTextAdapter, ZstandardTextAdapter
-from smcp_worker.adapters.video import Av1VideoAdapter, LivePortraitVideoAdapter
+from smcp_worker.adapters.video import (
+    Av1VideoAdapter,
+    CoolChicVideoAdapter,
+    HiNervVideoAdapter,
+    LivePortraitVideoAdapter,
+)
 from smcp_worker.model_manifest import load_catalog
 from smcp_worker.models import CodecCapabilities, Profile
 
@@ -24,6 +34,9 @@ def _model_capabilities() -> tuple[CodecCapabilities, ...]:
         if model.id == "cod-lite":
             capabilities.append(CodLiteImageAdapter(manifest=model).capabilities())
             continue
+        if model.id == "coolchic-image":
+            capabilities.append(CoolChicImageAdapter(manifest=model).capabilities())
+            continue
         if model.id == "snac":
             capabilities.append(SnacAudioAdapter(manifest=model).capabilities())
             continue
@@ -35,6 +48,12 @@ def _model_capabilities() -> tuple[CodecCapabilities, ...]:
             continue
         if model.id == "liveportrait":
             capabilities.append(LivePortraitVideoAdapter(manifest=model).capabilities())
+            continue
+        if model.id == "coolchic-video":
+            capabilities.append(CoolChicVideoAdapter(manifest=model).capabilities())
+            continue
+        if model.id == "hinerv-video":
+            capabilities.append(HiNervVideoAdapter(manifest=model).capabilities())
             continue
         if model.enabled:
             raise RuntimeError(

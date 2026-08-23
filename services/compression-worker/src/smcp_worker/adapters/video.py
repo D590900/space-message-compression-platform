@@ -22,6 +22,8 @@ from smcp_worker.adapters.external import (
     transform,
     version_line,
 )
+from smcp_worker.coolchic_runtime import VIDEO_MAGIC as COOLCHIC_VIDEO_MAGIC
+from smcp_worker.hinerv_runtime import MAGIC as HINERV_MAGIC
 from smcp_worker.liveportrait_runtime import MAGIC as LIVEPORTRAIT_MAGIC
 from smcp_worker.liveportrait_runtime import video_contract_supported
 from smcp_worker.model_manifest import ModelManifest, load_catalog
@@ -50,6 +52,32 @@ def liveportrait_manifest_for_version(
     ]
     if len(matches) != 1:
         raise LookupError(f"no unique LivePortrait manifest for persisted version {version!r}")
+    return matches[0]
+
+
+def coolchic_video_manifest_for_version(
+    version: str, catalog_path: Path = MODEL_CATALOG
+) -> ModelManifest:
+    """Resolve the immutable manifest belonging to a persisted Cool-Chic video."""
+    matches = [
+        model
+        for model in load_catalog(catalog_path).models
+        if model.codec_id == "video.coolchic" and model.version == version
+    ]
+    if len(matches) != 1:
+        raise LookupError(f"no unique Cool-Chic video manifest for persisted version {version!r}")
+    return matches[0]
+
+
+def hinerv_manifest_for_version(version: str, catalog_path: Path = MODEL_CATALOG) -> ModelManifest:
+    """Resolve the immutable manifest belonging to a persisted HiNeRV video."""
+    matches = [
+        model
+        for model in load_catalog(catalog_path).models
+        if model.codec_id == "video.hinerv" and model.version == version
+    ]
+    if len(matches) != 1:
+        raise LookupError(f"no unique HiNeRV manifest for persisted version {version!r}")
     return matches[0]
 
 
@@ -287,6 +315,322 @@ class Av1VideoAdapter:
                 "pose_error_status": "not_evaluated:no_versioned_pose_model",
             },
             gate_failures=tuple(failures),
+        )
+
+
+class CoolChicVideoAdapter(Av1VideoAdapter):
+    """Per-video overfit codec with neural decoder parameters embedded in-band."""
+
+    def __init__(
+        self, manifest: ModelManifest | None = None, source_root: Path | None = None
+    ) -> None:
+        self.manifest = manifest or next(
+            model for model in load_catalog(MODEL_CATALOG).models if model.id == "coolchic-video"
+        )
+        self.source_root = source_root or Path(
+            os.environ.get("SMCP_COOLCHIC_ROOT", "/opt/coolchic")
+        )
+        self.python_executable = os.environ.get("SMCP_COOLCHIC_PYTHON", sys.executable)
+
+    def capabilities(self) -> CodecCapabilities:
+        if not self.manifest.enabled:
+            return CodecCapabilities(
+                self.manifest.codec_id,
+                self.manifest.version,
+                ("VIDEO",),
+                (Profile.ULTRA,),
+                False,
+                True,
+                self.manifest.disabled_reason,
+                self.manifest.install_hint,
+            )
+        required = (self.source_root / "cc_encode.py", self.source_root / "cc_decode.py")
+        missing = [str(path) for path in required if not path.is_file()]
+        return CodecCapabilities(
+            self.manifest.codec_id,
+            self.manifest.version,
+            ("VIDEO",),
+            (Profile.ULTRA,),
+            not missing,
+            True,
+            f"required pinned Cool-Chic source is missing: {', '.join(missing)}"
+            if missing
+            else None,
+            self.manifest.install_hint if missing else None,
+        )
+
+    @staticmethod
+    def supports_prepared(prepared: PreparedInput) -> bool:
+        if prepared.canonical_bytes is None:
+            return False
+        with tempfile.TemporaryDirectory(prefix="smcp-coolchic-video-support-") as directory:
+            path = Path(directory) / "input.avi"
+            path.write_bytes(prepared.canonical_bytes)
+            try:
+                report = json.loads(
+                    run(
+                        (
+                            "ffprobe",
+                            "-v",
+                            "error",
+                            "-count_frames",
+                            "-select_streams",
+                            "v:0",
+                            "-show_entries",
+                            "stream=width,height,avg_frame_rate,nb_read_frames",
+                            "-of",
+                            "json",
+                            str(path),
+                        ),
+                        timeout=60,
+                    ).stdout
+                )
+                stream = report["streams"][0]
+                width, height = int(stream["width"]), int(stream["height"])
+                rate = Fraction(stream["avg_frame_rate"])
+                frames = int(stream["nb_read_frames"])
+            except (KeyError, IndexError, ValueError, subprocess.SubprocessError):
+                return False
+        return (
+            32 <= width <= 640
+            and 32 <= height <= 640
+            and width % 2 == 0
+            and height % 2 == 0
+            and 0 < rate <= 60
+            and 1 <= frames <= 32
+        )
+
+    def _command(
+        self, mode: str, input_path: Path, output_path: Path, *, level: int = 1
+    ) -> tuple[str, ...]:
+        command = (
+            self.python_executable,
+            "-m",
+            "smcp_worker.coolchic_runtime",
+            mode,
+            "--source-root",
+            str(self.source_root),
+            "--input",
+            str(input_path),
+            "--output",
+            str(output_path),
+        )
+        if mode == "encode-video":
+            lmbda = {1: "0.003", 2: "0.001", 3: "0.0003"}.get(level)
+            if lmbda is None:
+                raise ValueError("Cool-Chic video level must be 1, 2 or 3")
+            return (*command, "--iterations", "2000", "--lambda", lmbda)
+        return command
+
+    def encode(self, prepared: PreparedInput, params: EncodeParams) -> EncodedCandidate:
+        capability = self.capabilities()
+        if not capability.enabled or prepared.canonical_bytes is None:
+            raise RuntimeError(capability.disabled_reason or "canonical video is missing")
+        if not self.supports_prepared(prepared):
+            raise ValueError("video is outside the bounded Cool-Chic input contract")
+        payload = transform(
+            prepared.canonical_bytes,
+            ".avi",
+            ".smcpccv",
+            self._command("encode-video", Path("{input}"), Path("{output}"), level=params.level),
+            timeout=86_400,
+        )
+        if not payload.startswith(COOLCHIC_VIDEO_MAGIC):
+            raise ValueError("Cool-Chic produced an invalid SMCP video container")
+        return EncodedCandidate(
+            self.manifest.codec_id,
+            self.manifest.version,
+            {
+                "level": params.level,
+                "iterations_per_frame": 2_000,
+                "weights_origin": "per_asset_embedded",
+                "audio_codec": "libopus",
+                "audio_bitrate_kbps": 48,
+                "classification": "GENERIC",
+                "coding_structure": "ALL_INTRA_NO_PRETRAINED_MOTION_MODEL",
+                "source_commit": self.manifest.code_commit,
+            },
+            payload,
+        )
+
+    def decode(self, candidate: EncodedCandidate) -> bytes:
+        persisted_manifest = coolchic_video_manifest_for_version(candidate.codec_version)
+        if persisted_manifest.version != self.manifest.version:
+            return CoolChicVideoAdapter(
+                manifest=persisted_manifest, source_root=self.source_root
+            ).decode(candidate)
+        capability = self.capabilities()
+        if not capability.enabled:
+            raise RuntimeError(capability.disabled_reason)
+        return transform(
+            candidate.payload,
+            ".smcpccv",
+            ".avi",
+            self._command("decode-video", Path("{input}"), Path("{output}")),
+            timeout=3_600,
+        )
+
+
+class HiNervVideoAdapter(Av1VideoAdapter):
+    """Per-video implicit neural representation with in-band quantized weights."""
+
+    def __init__(
+        self, manifest: ModelManifest | None = None, source_root: Path | None = None
+    ) -> None:
+        self.manifest = manifest or next(
+            model for model in load_catalog(MODEL_CATALOG).models if model.id == "hinerv-video"
+        )
+        self.source_root = source_root or Path(os.environ.get("SMCP_HINERV_ROOT", "/opt/hinerv"))
+        self.python_executable = os.environ.get("SMCP_HINERV_PYTHON", sys.executable)
+
+    def capabilities(self) -> CodecCapabilities:
+        if not self.manifest.enabled:
+            return CodecCapabilities(
+                self.manifest.codec_id,
+                self.manifest.version,
+                ("VIDEO",),
+                (Profile.ULTRA,),
+                False,
+                True,
+                self.manifest.disabled_reason,
+                self.manifest.install_hint,
+            )
+        required = (self.source_root / "hinerv_main.py", self.source_root / "LICENSE")
+        missing = [str(path) for path in required if not path.is_file()]
+        return CodecCapabilities(
+            self.manifest.codec_id,
+            self.manifest.version,
+            ("VIDEO",),
+            (Profile.ULTRA,),
+            not missing,
+            True,
+            f"required pinned HiNeRV source is missing: {', '.join(missing)}" if missing else None,
+            self.manifest.install_hint if missing else None,
+        )
+
+    @staticmethod
+    def supports_prepared(prepared: PreparedInput) -> bool:
+        if prepared.canonical_bytes is None:
+            return False
+        with tempfile.TemporaryDirectory(prefix="smcp-hinerv-support-") as directory:
+            path = Path(directory) / "input.avi"
+            path.write_bytes(prepared.canonical_bytes)
+            try:
+                report = json.loads(
+                    run(
+                        (
+                            "ffprobe",
+                            "-v",
+                            "error",
+                            "-count_frames",
+                            "-select_streams",
+                            "v:0",
+                            "-show_entries",
+                            "stream=width,height,avg_frame_rate,nb_read_frames",
+                            "-of",
+                            "json",
+                            str(path),
+                        ),
+                        timeout=60,
+                    ).stdout
+                )
+                stream = report["streams"][0]
+                width, height = int(stream["width"]), int(stream["height"])
+                rate = Fraction(stream["avg_frame_rate"])
+                frames = int(stream["nb_read_frames"])
+            except (KeyError, IndexError, ValueError, subprocess.SubprocessError):
+                return False
+        return (
+            32 <= width <= 640
+            and 32 <= height <= 640
+            and width % 16 == 0
+            and height % 16 == 0
+            and 0 < rate <= 60
+            and 1 <= frames <= 32
+        )
+
+    def _command(
+        self, mode: str, input_path: Path, output_path: Path, *, level: int = 1
+    ) -> tuple[str, ...]:
+        command = (
+            self.python_executable,
+            "-m",
+            "smcp_worker.hinerv_runtime",
+            mode,
+            "--source-root",
+            str(self.source_root),
+            "--python",
+            self.python_executable,
+            "--input",
+            str(input_path),
+            "--output",
+            str(output_path),
+        )
+        if mode == "encode":
+            configuration = {1: (30, 32), 2: (100, 64), 3: (300, 96)}.get(level)
+            if configuration is None:
+                raise ValueError("HiNeRV level must be 1, 2 or 3")
+            epochs, channels = configuration
+            return (
+                *command,
+                "--epochs",
+                str(epochs),
+                "--channels",
+                str(channels),
+            )
+        return command
+
+    def encode(self, prepared: PreparedInput, params: EncodeParams) -> EncodedCandidate:
+        capability = self.capabilities()
+        if not capability.enabled or prepared.canonical_bytes is None:
+            raise RuntimeError(capability.disabled_reason or "canonical video is missing")
+        if not self.supports_prepared(prepared):
+            raise ValueError("video is outside the bounded HiNeRV input contract")
+        configuration = {1: (30, 32), 2: (100, 64), 3: (300, 96)}.get(params.level)
+        if configuration is None:
+            raise ValueError("HiNeRV level must be 1, 2 or 3")
+        epochs, channels = configuration
+        payload = transform(
+            prepared.canonical_bytes,
+            ".avi",
+            ".hnrv",
+            self._command("encode", Path("{input}"), Path("{output}"), level=params.level),
+            timeout=86_400,
+        )
+        if not payload.startswith(HINERV_MAGIC):
+            raise ValueError("HiNeRV produced an invalid SMCP container")
+        return EncodedCandidate(
+            self.manifest.codec_id,
+            self.manifest.version,
+            {
+                "level": params.level,
+                "epochs": epochs,
+                "channels": channels,
+                "quantization_bits": 6,
+                "weights_origin": "per_asset_embedded",
+                "audio_codec": "libopus",
+                "audio_bitrate_kbps": 48,
+                "classification": "GENERIC",
+                "source_commit": self.manifest.code_commit,
+            },
+            payload,
+        )
+
+    def decode(self, candidate: EncodedCandidate) -> bytes:
+        persisted_manifest = hinerv_manifest_for_version(candidate.codec_version)
+        if persisted_manifest.version != self.manifest.version:
+            return HiNervVideoAdapter(
+                manifest=persisted_manifest, source_root=self.source_root
+            ).decode(candidate)
+        capability = self.capabilities()
+        if not capability.enabled:
+            raise RuntimeError(capability.disabled_reason)
+        return transform(
+            candidate.payload,
+            ".hnrv",
+            ".avi",
+            self._command("decode", Path("{input}"), Path("{output}")),
+            timeout=3_600,
         )
 
 
@@ -626,6 +970,8 @@ def generate_video_candidates(
 ) -> list[tuple[EncodedCandidate, QualityReport]]:
     adapters_and_levels = (
         (Av1VideoAdapter(), (28, 36, 44)),
+        (CoolChicVideoAdapter(), (1,)),
+        (HiNervVideoAdapter(), (1,)),
         (LivePortraitVideoAdapter(), (35,)),
     )
     candidates: list[tuple[EncodedCandidate, QualityReport]] = []
@@ -634,9 +980,9 @@ def generate_video_candidates(
         if not capability.enabled or profile not in capability.profiles:
             continue
         prepared = adapter.preprocess(source, profile)
-        if isinstance(adapter, LivePortraitVideoAdapter) and not adapter.supports_prepared(
-            prepared
-        ):
+        if isinstance(
+            adapter, CoolChicVideoAdapter | HiNervVideoAdapter | LivePortraitVideoAdapter
+        ) and not adapter.supports_prepared(prepared):
             continue
         for level in levels:
             encode_started = time.perf_counter_ns()

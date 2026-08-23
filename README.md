@@ -14,7 +14,7 @@ An API-first platform for producing reproducible, quality-gated compressed artif
 - TypeScript and Python SDKs, a JSON-output CLI, versioned OpenAPI, synthetic benchmarks and golden vectors.
 - Non-root, read-only runtime containers; full-history secret scanning, dependency scanning, image scanning, SBOMs and release provenance in CI.
 
-CoD-Lite, SNAC 24 kHz, Mimi 24 kHz, EnCodec 48 kHz and the detector-free LivePortrait core are available through optional digest-pinned CUDA and CPU workers. Their weights are fetched explicitly into an external verified cache and are never bundled or downloaded implicitly. CompressAI, MLVC and DCVC remain disabled until checkpoint-specific terms and runtime artifacts are approved.
+CoD-Lite, SNAC 24 kHz, Mimi 24 kHz, EnCodec 48 kHz and the detector-free LivePortrait core are available through optional digest-pinned CUDA and CPU workers. Their weights are fetched explicitly into an external verified cache and are never bundled or downloaded implicitly. Cool-Chic image, all-intra Cool-Chic video and HiNeRV video replace CompressAI, MLVC and DCVC: they generate parameters per asset, embed them in the bitstream and never load an external checkpoint. They remain disabled only until their scanned runtime images are published and pinned by digest.
 
 ## Repository map
 

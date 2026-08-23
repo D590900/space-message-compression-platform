@@ -1,0 +1,6 @@
+accelerate==0.23.0
+pytorch-msssim==1.0.0
+timm==0.9.7
+torch==2.4.1
+torchac==0.9.3
+torchvision==0.19.1
