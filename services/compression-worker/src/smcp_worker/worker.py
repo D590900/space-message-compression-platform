@@ -33,6 +33,7 @@ from smcp_worker.adapters.image import (
     AvifImageAdapter,
     CodLiteImageAdapter,
     JpegXlImageAdapter,
+    cod_lite_manifest_for_version,
     generate_image_candidates,
 )
 from smcp_worker.adapters.text import (
@@ -330,10 +331,16 @@ class CompressionWorker:
                 return
             if job["status"] != "PENDING" and not self._recover_compression_job(connection, job):
                 return
-            if Profile(job["profile"]) == Profile.SEMANTIC:
+            profile = Profile(job["profile"])
+            input_type = str(job["input_type"])
+            if profile == Profile.SEMANTIC and not any(
+                capability.enabled
+                and input_type in capability.content_types
+                and profile in capability.profiles
+                for capability in all_capabilities()
+            ):
                 self._terminal_failure(connection, job, "SEMANTIC_PROFILE_UNAVAILABLE")
                 return
-            input_type = str(job["input_type"])
             self._transition(connection, job_id, tenant_subject, "PENDING", "VALIDATING")
             response = self.s3.get_object(Bucket=self.settings.s3_bucket, Key=job["object_key"])
             source_bytes = response["Body"].read(self.settings.max_upload_bytes + 1)
@@ -384,9 +391,7 @@ class CompressionWorker:
             source = SourceObject(source_bytes, job["declared_mime"], job["object_key"])
             self._transition(connection, job_id, tenant_subject, "PREPROCESSING", "ENCODING")
             started = time.perf_counter_ns()
-            generated_candidates = self._generate_candidates(
-                input_type, source, Profile(job["profile"])
-            )
+            generated_candidates = self._generate_candidates(input_type, source, profile)
             candidates = [
                 (candidate, updated_report)
                 for candidate, report in generated_candidates
@@ -968,7 +973,14 @@ class CompressionWorker:
             elif candidate.codec_id == "image.jpeg-xl":
                 decoded = JpegXlImageAdapter().decode(candidate)
             elif candidate.codec_id == "image.cod-lite":
-                decoded = CodLiteImageAdapter().decode(candidate)
+                try:
+                    manifest = cod_lite_manifest_for_version(candidate.codec_version)
+                except LookupError:
+                    self._terminal_decompression_failure(
+                        connection, decompression_id, tenant_subject, "DECODER_UNAVAILABLE"
+                    )
+                    return
+                decoded = CodLiteImageAdapter(manifest=manifest).decode(candidate)
             elif candidate.codec_id == "audio.opus":
                 decoded = OpusAudioAdapter().decode(candidate)
             elif candidate.codec_id == "video.av1":

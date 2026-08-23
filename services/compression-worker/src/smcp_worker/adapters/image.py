@@ -36,6 +36,20 @@ IMAGE_MIME_TYPES = {"image/jpeg", "image/png", "image/webp", "image/tiff", "imag
 MODEL_CATALOG = Path(__file__).resolve().parents[3] / "model-manifests" / "catalog.json"
 
 
+def cod_lite_manifest_for_version(
+    version: str, catalog_path: Path = MODEL_CATALOG
+) -> ModelManifest:
+    """Resolve the immutable manifest belonging to a persisted CoD-Lite bitstream."""
+    matches = [
+        model
+        for model in load_catalog(catalog_path).models
+        if model.codec_id == "image.cod-lite" and model.version == version
+    ]
+    if len(matches) != 1:
+        raise LookupError(f"no unique CoD-Lite manifest for persisted version {version!r}")
+    return matches[0]
+
+
 def _capability(
     *,
     codec_id: str,
@@ -473,7 +487,8 @@ def generate_image_candidates(
     )
     candidates: list[tuple[EncodedCandidate, QualityReport]] = []
     for adapter, levels in adapters_and_levels:
-        if not adapter.capabilities().enabled:
+        capability = adapter.capabilities()
+        if not capability.enabled or profile not in capability.profiles:
             continue
         prepared = adapter.preprocess(source, profile)
         for level in levels:

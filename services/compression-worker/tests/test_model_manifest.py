@@ -55,6 +55,17 @@ def test_enabled_model_requires_complete_weight_and_decoder_provenance() -> None
         ModelCatalog.model_validate_json(json.dumps(payload))
 
 
+def test_catalog_retains_multiple_versions_for_persisted_decoder_selection() -> None:
+    payload = json.loads(Path("model-manifests/catalog.json").read_text(encoding="utf-8"))
+    current = next(model for model in payload["models"] if model["id"] == "cod-lite")
+    historical = {**current, "version": "historical-test-vector"}
+    payload["models"].append(historical)
+
+    catalog = ModelCatalog.model_validate(payload)
+
+    assert [model.codec_id for model in catalog.models].count("image.cod-lite") == 2
+
+
 def test_explicit_weight_fetch_is_hash_checked_and_read_only(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

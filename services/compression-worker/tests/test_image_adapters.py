@@ -1,13 +1,20 @@
 import hashlib
+import json
 import subprocess
 from pathlib import Path
 
 import pytest
 
 from smcp_worker.adapters.external import executable, run
-from smcp_worker.adapters.image import AvifImageAdapter, CodLiteImageAdapter, JpegXlImageAdapter
+from smcp_worker.adapters.image import (
+    AvifImageAdapter,
+    CodLiteImageAdapter,
+    JpegXlImageAdapter,
+    cod_lite_manifest_for_version,
+    generate_image_candidates,
+)
 from smcp_worker.model_manifest import load_catalog
-from smcp_worker.models import EncodeParams, PreparedInput, Profile, SourceObject
+from smcp_worker.models import CodecCapabilities, EncodeParams, PreparedInput, Profile, SourceObject
 
 
 @pytest.fixture
@@ -143,3 +150,59 @@ def test_cod_lite_rejects_tampered_cached_artifact(tmp_path: Path) -> None:
     capability = CodLiteImageAdapter(manifest, source_root, cache_root).capabilities()
     assert not capability.enabled
     assert "failed SHA-256 verification" in (capability.disabled_reason or "")
+
+
+def test_cod_lite_decoder_manifest_is_resolved_by_persisted_version(tmp_path: Path) -> None:
+    payload = json.loads(Path("model-manifests/catalog.json").read_text(encoding="utf-8"))
+    current = next(model for model in payload["models"] if model["id"] == "cod-lite")
+    historical = {**current, "version": "historical-test-vector"}
+    payload["models"].append(historical)
+    catalog_path = tmp_path / "catalog.json"
+    catalog_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    resolved = cod_lite_manifest_for_version("historical-test-vector", catalog_path)
+
+    assert resolved.version == "historical-test-vector"
+    with pytest.raises(LookupError, match="persisted version"):
+        cod_lite_manifest_for_version("missing-version", catalog_path)
+
+
+def test_cod_lite_is_not_generated_for_faithful_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class DisabledAdapter:
+        def capabilities(self) -> CodecCapabilities:
+            return CodecCapabilities(
+                "image.disabled",
+                "test",
+                ("IMAGE",),
+                (Profile.FAITHFUL, Profile.ULTRA),
+                False,
+                True,
+                "disabled for test",
+            )
+
+    class SemanticOnlyAdapter:
+        def capabilities(self) -> CodecCapabilities:
+            return CodecCapabilities(
+                "image.cod-lite",
+                "test",
+                ("IMAGE",),
+                (Profile.ULTRA, Profile.SEMANTIC),
+                True,
+                False,
+            )
+
+        def preprocess(self, _source: SourceObject, _profile: Profile) -> PreparedInput:
+            raise AssertionError("unsupported profile reached CoD-Lite preprocessing")
+
+    monkeypatch.setattr("smcp_worker.adapters.image.AvifImageAdapter", DisabledAdapter)
+    monkeypatch.setattr("smcp_worker.adapters.image.JpegXlImageAdapter", DisabledAdapter)
+    monkeypatch.setattr("smcp_worker.adapters.image.CodLiteImageAdapter", SemanticOnlyAdapter)
+
+    assert (
+        generate_image_candidates(
+            SourceObject(b"not-decoded", "image/png", "source.png"), Profile.FAITHFUL
+        )
+        == []
+    )

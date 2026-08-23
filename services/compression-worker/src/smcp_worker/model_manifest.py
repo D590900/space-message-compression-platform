@@ -106,9 +106,6 @@ class ModelCatalog(BaseModel):
         identities = [(model.id, model.version) for model in self.models]
         if len(set(identities)) != len(identities):
             raise ValueError("model id/version pairs must be unique")
-        codecs = [model.codec_id for model in self.models]
-        if len(set(codecs)) != len(codecs):
-            raise ValueError("each optional codec must have one catalog entry")
         return self
 
 
