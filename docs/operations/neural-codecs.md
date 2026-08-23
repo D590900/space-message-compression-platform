@@ -101,3 +101,9 @@ docker run --rm \
 ```
 
 Production deployments must replace the convenience worker tag with the digest emitted by the `mimi-worker` workflow artifact. The catalog pins the smaller runtime digest because it is the immutable decoding contract shared by derived workers.
+
+## EnCodec 48 kHz approval and runtime publication
+
+The official `facebook/encodec_48khz` checkpoint at immutable Hugging Face revision `c3def8e7185ac8c8efdce6eb8c4a651e487a503e` declares MIT terms in its model metadata. The real adapter uses the Apache-2.0 Transformers 5.5.0 implementation pinned to commit `c1c34249fa27deefbd4a377dfbf883a39baf5c6d`, accepts canonical stereo signed 16-bit PCM at 48 kHz up to 30 seconds, and stores chunk normalization scales plus 1024-entry codebooks in a bounded, versioned, canonical 10-bit token container. It loads the exact 76,291,152-byte `safetensors` checkpoint without pickle.
+
+Local Linux/amd64 validation verified the declared weight/configuration hashes, deterministic double encoding, and a real decode to exactly 48 kHz stereo with the original 0.25-second duration. The canonical 3 kbps payload was 125 bytes for a 48,078-byte PCM test input. `.github/workflows/encodec-runtime.yml` independently fetches the external artifacts, repeats the real inference gates, scans the exact weight-free image, emits SPDX and publishes only on manual dispatch. Until that workflow publishes an immutable digest and it is recorded in the catalog, `audio.encodec` remains explicitly disabled.

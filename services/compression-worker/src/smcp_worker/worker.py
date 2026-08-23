@@ -28,9 +28,11 @@ from smcp_worker.adapters import image as image_module
 from smcp_worker.adapters import text as text_module
 from smcp_worker.adapters import video as video_module
 from smcp_worker.adapters.audio import (
+    EncodecAudioAdapter,
     MimiAudioAdapter,
     OpusAudioAdapter,
     SnacAudioAdapter,
+    encodec_manifest_for_version,
     generate_audio_candidates,
     mimi_manifest_for_version,
     snac_manifest_for_version,
@@ -1008,6 +1010,15 @@ class CompressionWorker:
                     )
                     return
                 decoded = MimiAudioAdapter(manifest=manifest).decode(candidate)
+            elif candidate.codec_id == "audio.encodec":
+                try:
+                    manifest = encodec_manifest_for_version(candidate.codec_version)
+                except LookupError:
+                    self._terminal_decompression_failure(
+                        connection, decompression_id, tenant_subject, "DECODER_UNAVAILABLE"
+                    )
+                    return
+                decoded = EncodecAudioAdapter(manifest=manifest).decode(candidate)
             elif candidate.codec_id == "video.av1":
                 decoded = Av1VideoAdapter().decode(candidate)
             else:

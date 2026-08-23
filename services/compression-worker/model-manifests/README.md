@@ -1,8 +1,8 @@
 # Model manifests
 
-Optional neural codecs remain disabled until a manifest in this directory contains immutable, independently verified code and weight provenance and a real decoder runtime is registered. Builds and imports never download weights. CoD-Lite, SNAC and Mimi are enabled and pin their published CUDA and CPU runtimes by digest.
+Optional neural codecs remain disabled until a manifest in this directory contains immutable, independently verified code and weight provenance and a real decoder runtime is registered. Builds and imports never download weights. CoD-Lite, SNAC and Mimi are enabled and pin their published CUDA and CPU runtimes by digest. EnCodec 48 kHz has approved provenance and stays disabled until its runtime digest is published.
 
-`catalog.json` pins the reviewed implementation revision and code-license evidence for every optional family. CoD-Lite's selected 0.0312-bpp checkpoint and SNAC 24 kHz have separately reviewed MIT terms, while Mimi 24 kHz pins Apache-2.0 Transformers code and CC-BY-4.0 checkpoint terms. All three use immutable Hugging Face revisions, verified weight/configuration hashes and published decoder images. The other five families' weight terms remain `UNKNOWN`. An implementation repository license alone is not evidence for a checkpoint license.
+`catalog.json` pins the reviewed implementation revision and code-license evidence for every optional family. CoD-Lite's selected 0.0312-bpp checkpoint and SNAC 24 kHz have separately reviewed MIT terms, while Mimi 24 kHz pins Apache-2.0 Transformers code and CC-BY-4.0 checkpoint terms. EnCodec 48 kHz separately declares MIT checkpoint terms in its official immutable model card and uses the same pinned Apache-2.0 Transformers runtime. All approved checkpoints use immutable Hugging Face revisions and verified weight/configuration hashes; only entries with published decoder images may be enabled. The other four families' weight terms remain `UNKNOWN`. An implementation repository license alone is not evidence for a checkpoint license.
 
 Validate the catalog:
 
