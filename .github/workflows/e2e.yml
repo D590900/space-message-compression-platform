@@ -18,7 +18,7 @@ jobs:
     timeout-minutes: 35
     env:
       CLERK_SECRET_KEY: sk_test_ci_placeholder
-      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: pk_test_ci_placeholder
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ vars.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
       WORKER_CLAIM_IDLE_MS: "10000"
     steps:
       - name: Check out repository

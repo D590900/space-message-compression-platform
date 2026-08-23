@@ -34,7 +34,7 @@ jobs:
           context: .
           file: infra/docker/${{ matrix.image }}/Dockerfile
           build-args: |
-            NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_ci_placeholder
+            NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${{ vars.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
           push: false
           load: true
           tags: smcp/${{ matrix.image }}:${{ github.sha }}
