@@ -8,6 +8,7 @@ LABEL org.opencontainers.image.source="https://github.com/D590900/space-message-
       org.opencontainers.image.licenses="Apache-2.0 AND MIT" \
       org.opencontainers.image.title="SMCP worker with CoD-Lite CUDA runtime"
 USER root
+COPY --chown=smcp:smcp services/compression-worker/src /opt/worker/src
 COPY --chown=smcp:smcp services/compression-worker/model-manifests /opt/worker/model-manifests
 RUN /opt/venv/bin/python -m smcp_worker.model_manifest validate \
       /opt/worker/model-manifests/catalog.json \

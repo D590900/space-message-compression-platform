@@ -14,15 +14,21 @@ The runtime is published in two phases to avoid a self-referential image digest:
 
 The runtime requires an NVIDIA host compatible with CUDA 12.4. `SMCP_COD_LITE_ROOT`, `SMCP_COD_LITE_PYTHON` and `SMCP_MODEL_CACHE` are set in the image. The model cache must be a persistent external volume writable only during the explicit fetch step and mounted read-only during normal worker operation.
 
-After the catalog contains the published decoder digest, fetch the approved artifacts explicitly:
+After the catalog contains the published decoder digest, choose the published worker image (pin its final digest in production), create a private cache owned by the image's non-root `smcp` user and run the explicit fetch as that same UID:
 
 ```console
-cd services/compression-worker
-uv run python -m smcp_worker.model_manifest fetch model-manifests/catalog.json \
+export SMCP_COD_LITE_WORKER=ghcr.io/d590900/smcp-worker-cod-lite:cod-lite-bpp-0.0312
+export SMCP_UID=$(docker run --rm --entrypoint /usr/bin/id "$SMCP_COD_LITE_WORKER" -u smcp)
+export SMCP_GID=$(docker run --rm --entrypoint /usr/bin/id "$SMCP_COD_LITE_WORKER" -g smcp)
+sudo install -d -o "$SMCP_UID" -g "$SMCP_GID" -m 0700 /var/lib/smcp/models
+docker run --rm --user "$SMCP_UID:$SMCP_GID" \
+  --mount type=bind,src=/var/lib/smcp/models,dst=/var/lib/smcp/models \
+  --entrypoint /opt/venv/bin/python "$SMCP_COD_LITE_WORKER" \
+  -m smcp_worker.model_manifest fetch /opt/worker/model-manifests/catalog.json \
   cod-lite bpp-0.0312-hf-cfda8135320f --cache /var/lib/smcp/models
 ```
 
-The fetcher downloads both `weights.bin` and `config.yaml` through private temporary files, checks their declared sizes and SHA-256 values, then installs them read-only. The adapter rechecks both hashes when the cache identity changes and refuses inference after any mismatch.
+The fetcher downloads both `weights.bin` and `config.yaml` through private temporary files, checks their declared sizes and SHA-256 values, then installs them mode `0400` below a mode `0700` version directory. Running the fetch as the serving UID makes those files readable by `smcp` without granting write access during service operation. The adapter rechecks both hashes when the cache identity changes and refuses inference after any mismatch. User-namespace-remapped or rootless installations should map ownership to the effective container UID reported by their runtime.
 
 Run the published GPU worker with the verified cache mounted read-only:
 

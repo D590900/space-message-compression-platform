@@ -55,6 +55,10 @@ jobs:
             "from pathlib import Path; from smcp_worker.model_manifest import load_catalog; model = next(item for item in load_catalog(Path('/opt/worker/model-manifests/catalog.json')).models if item.id == 'cod-lite'); assert model.enabled; assert model.decoder_image_digest == 'sha256:791454206faacd38b9b4126f89a998a2d2ff9761f8cd1dcdc81e7030022035cf'"
           docker run --rm --entrypoint /bin/sh "$IMAGE" -c \
             'test ! -e /var/lib/smcp/models/cod-lite && test ! -e /usr/bin/uv && test ! -e /usr/bin/uvx'
+          host_source_hash=$(sha256sum services/compression-worker/src/smcp_worker/worker.py | cut -d' ' -f1)
+          image_source_hash=$(docker run --rm --entrypoint /usr/bin/sha256sum "$IMAGE" \
+            /opt/worker/src/smcp_worker/worker.py | cut -d' ' -f1)
+          [[ "$image_source_hash" == "$host_source_hash" ]]
       - name: Scan candidate image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
