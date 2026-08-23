@@ -129,4 +129,4 @@ docker run --rm \
   ghcr.io/d590900/smcp-worker-encodec:encodec-48khz
 ```
 
-Production deployments must replace the convenience worker tag with the digest emitted by the `encodec-worker` workflow artifact. The catalog pins the smaller runtime digest because it is the immutable decoding contract shared by derived workers.
+Production deployments must replace the convenience worker tag with the exact digest from run `32656675384`: `ghcr.io/d590900/smcp-worker-encodec@sha256:7b8f5759360bb561f63f24aedf4f4ee587a0e47c4d6f1fa913a8e36085551494`. The downloaded workflow artifact matched the GHCR manifest digest, contained a valid SPDX 2.3 SBOM, and passed independent OCI provenance verification. The catalog pins the smaller runtime digest because it is the immutable decoding contract shared by derived workers.
