@@ -65,6 +65,13 @@ COMPRESSION_STREAM = "smcp:compression-jobs"
 DECOMPRESSION_STREAM = "smcp:decompression-jobs"
 CAPSULE_STREAM = "smcp:capsule-jobs"
 TRACER = trace.get_tracer("smcp.compression-worker")
+ACK_AND_DELETE_SCRIPT = """
+local acknowledged = redis.call('XACK', KEYS[1], ARGV[1], ARGV[2])
+if acknowledged == 1 then
+  redis.call('XDEL', KEYS[1], ARGV[2])
+end
+return acknowledged
+"""
 
 
 class CompressionWorker:
@@ -217,7 +224,7 @@ class CompressionWorker:
         tenant_subject = fields.get("tenant_subject")
         if not job_id or not tenant_subject:
             LOGGER.error("rejecting malformed queue message", extra={"message_id": message_id})
-            self.redis.xack(stream, self.settings.worker_group, message_id)
+            self._acknowledge(stream, message_id)
             return
         try:
             UUID(job_id)
@@ -226,7 +233,7 @@ class CompressionWorker:
                 "rejecting queue message with invalid job id",
                 extra={"message_id": message_id},
             )
-            self.redis.xack(stream, self.settings.worker_group, message_id)
+            self._acknowledge(stream, message_id)
             return
         job_type = {
             COMPRESSION_STREAM: "compression",
@@ -264,12 +271,22 @@ class CompressionWorker:
                 LOGGER.exception("worker job failed", extra={"job_id": job_id, "stream": stream})
                 terminal = self._fail_job(stream, job_id, tenant_subject, "WORKER_FAILURE")
                 if terminal:
-                    self.redis.xack(stream, self.settings.worker_group, message_id)
+                    self._acknowledge(stream, message_id)
             else:
                 JOBS.labels(job_type=job_type, outcome="processed").inc()
-                self.redis.xack(stream, self.settings.worker_group, message_id)
+                self._acknowledge(stream, message_id)
             finally:
                 JOB_DURATION.labels(job_type=job_type).observe(time.perf_counter() - started)
+
+    def _acknowledge(self, stream: str, message_id: str) -> None:
+        """Acknowledge a terminal message and delete it only when XACK succeeds."""
+        self.redis.eval(
+            ACK_AND_DELETE_SCRIPT,
+            1,
+            stream,
+            self.settings.worker_group,
+            message_id,
+        )
 
     def process_job(self, job_id: str, tenant_subject: str) -> None:
         with psycopg.connect(self.settings.database_url, row_factory=dict_row) as connection:
