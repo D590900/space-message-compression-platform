@@ -2,7 +2,7 @@
 
 Optional neural codecs remain disabled until a manifest in this directory contains immutable, independently verified code and weight provenance and a real decoder runtime is registered. Builds and imports never download weights. CoD-Lite is the first enabled entry and pins its published CUDA runtime by digest.
 
-`catalog.json` pins the reviewed implementation revision and code-license evidence for every optional family. CoD-Lite's selected 0.0312-bpp checkpoint has separately reviewed MIT terms, an immutable Hugging Face revision, verified weight/configuration hashes and a published decoder image. Other weight terms remain `UNKNOWN`. An implementation repository license alone is not evidence for a checkpoint license.
+`catalog.json` pins the reviewed implementation revision and code-license evidence for every optional family. CoD-Lite's selected 0.0312-bpp checkpoint has separately reviewed MIT terms, an immutable Hugging Face revision, verified weight/configuration hashes and a published decoder image. SNAC 24 kHz has the same checkpoint-level evidence and a real adapter, but remains disabled until its decoder runtime is published and pinned. The other six families' weight terms remain `UNKNOWN`. An implementation repository license alone is not evidence for a checkpoint license.
 
 Validate the catalog:
 

@@ -43,3 +43,9 @@ docker run --rm --gpus all \
 Production deployments should pin the final worker by the digest emitted in the `cod-lite-worker` workflow artifact, not by its convenience tag. The model catalog intentionally pins the smaller decoder-runtime digest because it is the immutable decoding contract shared by derived workers.
 
 Do not make the model cache writable by the serving process. Do not copy it into a container layer, CI artifact or source archive.
+
+## SNAC 24 kHz staging gate
+
+The official `hubertsiuzdak/snac_24khz` checkpoint at immutable Hugging Face revision `d73ad176a12188fcf4f360ba3bf2c2fbbe8f58ec` declares MIT terms independently from the pinned MIT implementation. The catalog records the exact 79,488,254-byte weight hash and 300-byte configuration hash. The real adapter accepts canonical mono signed 16-bit PCM at 24 kHz up to 60 seconds and stores the three hierarchical 4096-entry codebooks in a bounded, versioned, canonical 12-bit token container; it never serializes tensors with pickle. Longer audio remains eligible for the Opus baseline in `ultra` mode and is not sent to the one-shot neural runtime.
+
+`.github/workflows/snac-runtime.yml` builds the CPU-only, hash-locked runtime, explicitly fetches and verifies the external checkpoint after the build, exercises a real encode/decode round trip, scans the exact image and publishes it only on manual dispatch. The catalog remains disabled until the resulting immutable runtime digest is recorded. This staging gate prevents a mutable tag or an untested decoder from becoming an advertised capability.

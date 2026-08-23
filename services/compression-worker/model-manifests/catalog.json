@@ -38,16 +38,22 @@
     {
       "id": "snac",
       "codec_id": "audio.snac",
-      "version": "git-8f79a718f1ad",
+      "version": "24khz-hf-d73ad176a121",
       "source": "https://github.com/hubertsiuzdak/snac",
       "code_commit": "8f79a718f1ad71f94f79999f0071348227aff22e",
       "license_code": "MIT",
       "license_code_evidence": "https://github.com/hubertsiuzdak/snac/blob/8f79a718f1ad71f94f79999f0071348227aff22e/LICENSE",
-      "license_weights": "UNKNOWN-separate-verification-required",
-      "input_contract": "Mono PCM; sample rate and token layout pending checkpoint approval",
+      "license_weights": "MIT",
+      "license_weights_evidence": "https://huggingface.co/hubertsiuzdak/snac_24khz/blob/d73ad176a12188fcf4f360ba3bf2c2fbbe8f58ec/README.md",
+      "weights_url": "https://huggingface.co/hubertsiuzdak/snac_24khz/resolve/d73ad176a12188fcf4f360ba3bf2c2fbbe8f58ec/pytorch_model.bin",
+      "weights_sha256": "4b8164cc6606bfa627f1a784734c1e539891518f1191ed9194fe1e3b9b4bff40",
+      "config_url": "https://huggingface.co/hubertsiuzdak/snac_24khz/resolve/d73ad176a12188fcf4f360ba3bf2c2fbbe8f58ec/config.json",
+      "config_sha256": "e119b9366d4f5e73c6ca5f31137c4ff361578bbb132953a5203afe037c4012be",
+      "input_contract": "Mono signed 16-bit PCM at 24 kHz, maximum 60 seconds; three hierarchical 4096-entry codebooks at approximately 12, 23 and 47 Hz, packed canonically as 12-bit tokens with the original sample count",
+      "adapter_entrypoint": "smcp_worker.adapters.audio:SnacAudioAdapter",
       "enabled": false,
-      "disabled_reason": "Checkpoint license, checksum and bit-packing contract are not approved",
-      "install_hint": "Approve a specific official SNAC checkpoint and immutable decoder image"
+      "disabled_reason": "The approved checkpoint and real adapter are ready, but the immutable decoder runtime has not been published and pinned yet",
+      "install_hint": "Publish the scanned SNAC runtime, record its digest, then enable this manifest in the derived worker"
     },
     {
       "id": "mimi",

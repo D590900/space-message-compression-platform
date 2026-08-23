@@ -44,6 +44,8 @@ def transform(
     input_suffix: str,
     output_suffix: str,
     command: Sequence[str],
+    *,
+    timeout: int = COMMAND_TIMEOUT_SECONDS,
 ) -> bytes:
     with tempfile.TemporaryDirectory(prefix="smcp-codec-") as directory:
         root = Path(directory)
@@ -54,7 +56,7 @@ def transform(
             part.replace("{input}", str(source)).replace("{output}", str(output))
             for part in command
         ]
-        run(resolved)
+        run(resolved, timeout=timeout)
         result = output.read_bytes()
         if not result:
             raise ValueError("codec produced an empty output")
