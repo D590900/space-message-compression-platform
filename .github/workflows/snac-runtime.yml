@@ -71,8 +71,8 @@ jobs:
           echo 'e119b9366d4f5e73c6ca5f31137c4ff361578bbb132953a5203afe037c4012be  /tmp/snac-model/config.yaml' | sha256sum --check --strict
           uid=$(docker run --rm --entrypoint /usr/bin/id "$IMAGE" -u smcp)
           gid=$(docker run --rm --entrypoint /usr/bin/id "$IMAGE" -g smcp)
-          chown -R "$uid:$gid" /tmp/snac-model
-          chmod 0400 /tmp/snac-model/*
+          sudo chown -R "$uid:$gid" /tmp/snac-model
+          sudo chmod 0400 /tmp/snac-model/*
       - name: Exercise real encode and decode
         env:
           IMAGE: smcp-snac-runtime:${{ github.sha }}
@@ -80,7 +80,7 @@ jobs:
           set -euo pipefail
           uid=$(docker run --rm --entrypoint /usr/bin/id "$IMAGE" -u smcp)
           gid=$(docker run --rm --entrypoint /usr/bin/id "$IMAGE" -g smcp)
-          install -d -o "$uid" -g "$gid" -m 0700 /tmp/snac-io
+          sudo install -d -o "$uid" -g "$gid" -m 0700 /tmp/snac-io
           docker run --rm --mount type=bind,src=/tmp/snac-io,dst=/io \
             --entrypoint /usr/local/bin/ffmpeg "$IMAGE" -v error -f lavfi \
             -i sine=frequency=440:sample_rate=24000:duration=0.25 -ac 1 \
