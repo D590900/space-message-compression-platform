@@ -11,12 +11,15 @@ from pydantic import ValidationError
 from smcp_worker.model_manifest import ModelCatalog, ModelManifest, fetch_weights, load_catalog
 
 
-def test_committed_model_catalog_records_reviewed_weights_without_enabling_runtime() -> None:
+def test_committed_model_catalog_enables_only_the_audited_cod_lite_runtime() -> None:
     catalog = load_catalog(Path("model-manifests/catalog.json"))
     assert len(catalog.models) == 8
-    assert all(not model.enabled for model in catalog.models)
     by_id = {model.id: model for model in catalog.models}
     cod_lite = by_id["cod-lite"]
+    assert cod_lite.enabled
+    assert cod_lite.decoder_image_digest == (
+        "sha256:791454206faacd38b9b4126f89a998a2d2ff9761f8cd1dcdc81e7030022035cf"
+    )
     assert cod_lite.license_weights == "MIT"
     assert cod_lite.license_weights_evidence is not None
     assert cod_lite.weights_sha256 == (
@@ -26,7 +29,7 @@ def test_committed_model_catalog_records_reviewed_weights_without_enabling_runti
         "af69be08f74378e3b3a9ef5d8b629a5e8acc49b0754282deba27d31adc3c70e4"
     )
     assert all(
-        model.license_weights.startswith("UNKNOWN")
+        not model.enabled and model.license_weights.startswith("UNKNOWN")
         for model in catalog.models
         if model.id != "cod-lite"
     )

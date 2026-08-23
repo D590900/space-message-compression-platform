@@ -1,8 +1,8 @@
 # Model manifests
 
-Optional neural codecs remain disabled until a manifest in this directory contains immutable, independently verified code and weight provenance and a real decoder runtime is registered. Builds and imports never download weights.
+Optional neural codecs remain disabled until a manifest in this directory contains immutable, independently verified code and weight provenance and a real decoder runtime is registered. Builds and imports never download weights. CoD-Lite is the first enabled entry and pins its published CUDA runtime by digest.
 
-`catalog.json` pins the reviewed implementation revision and code-license evidence for every optional family. CoD-Lite's selected 0.0312-bpp checkpoint has separately reviewed MIT terms, an immutable Hugging Face revision and verified weight/configuration hashes. Its runtime remains disabled until a pinned CUDA adapter and immutable decoder image are packaged. Other weight terms remain `UNKNOWN`. An implementation repository license alone is not evidence for a checkpoint license.
+`catalog.json` pins the reviewed implementation revision and code-license evidence for every optional family. CoD-Lite's selected 0.0312-bpp checkpoint has separately reviewed MIT terms, an immutable Hugging Face revision, verified weight/configuration hashes and a published decoder image. Other weight terms remain `UNKNOWN`. An implementation repository license alone is not evidence for a checkpoint license.
 
 Validate the catalog:
 
