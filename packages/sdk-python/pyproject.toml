@@ -11,7 +11,7 @@ requires = ["hatchling>=1.28,<2"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
-dev = ["mypy>=1.19,<2", "pytest>=9,<10", "ruff>=0.16,<0.17"]
+dev = ["mypy>=1.19,<3", "pytest>=9,<10", "ruff>=0.16,<0.17"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/smcp_sdk"]
