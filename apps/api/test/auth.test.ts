@@ -113,6 +113,23 @@ describe("API-key policy", () => {
     });
   });
 
+  it.each([
+    { revoked: true },
+    { expired: true },
+    { expiration: Date.now() - 1_000 },
+  ])("rejects invalid key metadata returned by Clerk: %o", async (metadata) => {
+    await expect(
+      requireApiKey(
+        new FakeClerk(managedKey(metadata)),
+        "Bearer invalid-secret",
+        "jobs:create",
+      ),
+    ).rejects.toMatchObject({
+      status: 401,
+      type: "urn:smcp:problem:invalid-api-key",
+    });
+  });
+
   it("restricts administrative dashboard operations to Clerk org admins", () => {
     const base = {
       kind: "session" as const,

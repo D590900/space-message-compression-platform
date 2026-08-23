@@ -36,6 +36,9 @@ type VerifiedApiKey = {
   scopes: string[];
   claims: Record<string, unknown> | null;
   createdBy: string | null;
+  expiration?: number | null;
+  expired?: boolean;
+  revoked?: boolean;
 };
 
 export type ManagedApiKey = VerifiedApiKey & {
@@ -76,8 +79,12 @@ export class ProductionClerkGateway implements ClerkGateway {
     });
   }
 
-  public verifyApiKey(secret: string): Promise<VerifiedApiKey> {
-    return this.client.apiKeys.verify(secret);
+  public async verifyApiKey(secret: string): Promise<VerifiedApiKey> {
+    const verified = await this.client.apiKeys.verify(secret);
+    // Clerk's verify endpoint can briefly return the pre-revocation snapshot.
+    // Fetch authoritative metadata by ID so revocation and expiry take effect
+    // on the next SMCP request rather than waiting for that snapshot to age out.
+    return this.client.apiKeys.get(verified.id);
   }
 
   public async authenticateSession(
@@ -163,6 +170,17 @@ export async function requireApiKey(
     key = await clerk.verifyApiKey(bearerSecret(authorization));
   } catch (error) {
     if (error instanceof ApiProblem) throw error;
+    throw new ApiProblem(
+      401,
+      "Invalid API key",
+      "urn:smcp:problem:invalid-api-key",
+    );
+  }
+  if (
+    key.revoked === true ||
+    key.expired === true ||
+    (typeof key.expiration === "number" && key.expiration <= Date.now())
+  ) {
     throw new ApiProblem(
       401,
       "Invalid API key",

@@ -18,15 +18,19 @@ describe("job outbox publisher", () => {
     const claimJobOutboxEvents = vi.fn(() => Promise.resolve([event]));
     const completeJobOutboxEvent = vi.fn(() => Promise.resolve());
     const failJobOutboxEvent = vi.fn(() => Promise.resolve());
+    const reconcileJobOutboxEvents = vi.fn(() => Promise.resolve(0));
     const publishCompression = vi.fn(() => Promise.resolve());
     const publisher = new JobOutboxPublisher(
       {
         claimJobOutboxEvents,
         completeJobOutboxEvent,
         failJobOutboxEvent,
+        reconcileJobOutboxEvents,
       } as unknown as Database,
       { publishCompression } as unknown as JobQueue,
       250,
+      60_000,
+      1_800_000,
     );
 
     await publisher.poll();
@@ -41,6 +45,7 @@ describe("job outbox publisher", () => {
       expect.any(String),
     );
     expect(failJobOutboxEvent).not.toHaveBeenCalled();
+    expect(reconcileJobOutboxEvents).toHaveBeenCalledWith(1_800_000);
   });
 
   it("releases failed claims with a redacted error class", async () => {
@@ -49,6 +54,7 @@ describe("job outbox publisher", () => {
     const failJobOutboxEvent = vi.fn(() => Promise.resolve());
     const publisher = new JobOutboxPublisher(
       {
+        reconcileJobOutboxEvents: () => Promise.resolve(0),
         claimJobOutboxEvents: () => Promise.resolve([event]),
         completeJobOutboxEvent: vi.fn(() => Promise.resolve()),
         failJobOutboxEvent,
@@ -57,6 +63,8 @@ describe("job outbox publisher", () => {
         publishCompression: vi.fn(() => Promise.reject(failure)),
       } as unknown as JobQueue,
       250,
+      60_000,
+      1_800_000,
     );
 
     await publisher.poll();
@@ -70,5 +78,26 @@ describe("job outbox publisher", () => {
     expect(JSON.stringify(failJobOutboxEvent.mock.calls)).not.toContain(
       "redis://secret",
     );
+  });
+
+  it("reconciles at the configured cadence", async () => {
+    const reconcileJobOutboxEvents = vi.fn(() => Promise.resolve(2));
+    const claimJobOutboxEvents = vi.fn(() => Promise.resolve([]));
+    const publisher = new JobOutboxPublisher(
+      {
+        reconcileJobOutboxEvents,
+        claimJobOutboxEvents,
+      } as unknown as Database,
+      {} as JobQueue,
+      250,
+      60_000,
+      1_800_000,
+    );
+
+    await publisher.poll();
+    await publisher.poll();
+
+    expect(reconcileJobOutboxEvents).toHaveBeenCalledTimes(1);
+    expect(claimJobOutboxEvents).toHaveBeenCalledTimes(2);
   });
 });

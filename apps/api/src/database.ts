@@ -1734,6 +1734,63 @@ export class Database {
     `;
   }
 
+  public async reconcileJobOutboxEvents(
+    staleMilliseconds: number,
+  ): Promise<number> {
+    const staleSeconds = Math.ceil(staleMilliseconds / 1_000);
+    return this.sql.begin(async (transaction) => {
+      await transaction`
+        SELECT pg_advisory_xact_lock(hashtext('smcp_job_outbox_reconcile'))
+      `;
+      const rows = await transaction<{ id: string }[]>`
+        WITH candidates AS (
+          SELECT id, tenant_subject, project_id, 'compression.requested' AS topic
+          FROM compression_jobs
+          WHERE status IN ('PENDING', 'FAILED_RETRYABLE')
+          UNION ALL
+          SELECT id, tenant_subject, project_id, 'decompression.requested' AS topic
+          FROM decompression_jobs
+          WHERE status IN ('PENDING', 'FAILED_RETRYABLE')
+          UNION ALL
+          SELECT id, tenant_subject, project_id, 'capsule.requested' AS topic
+          FROM capsules
+          WHERE status IN ('PENDING', 'FAILED_RETRYABLE')
+        )
+        INSERT INTO outbox_events (
+          tenant_subject, project_id, topic, aggregate_id, payload
+        )
+        SELECT candidate.tenant_subject, candidate.project_id, candidate.topic,
+               candidate.id,
+               jsonb_build_object(
+                 CASE candidate.topic
+                   WHEN 'compression.requested' THEN 'job_id'
+                   WHEN 'decompression.requested' THEN 'decompression_id'
+                   ELSE 'capsule_id'
+                 END,
+                 candidate.id,
+                 'tenant_subject', candidate.tenant_subject,
+                 'request_id', 'reconcile:' || candidate.id::text
+               )
+        FROM candidates AS candidate
+        WHERE NOT EXISTS (
+          SELECT 1 FROM outbox_events AS pending
+          WHERE pending.topic = candidate.topic
+            AND pending.aggregate_id = candidate.id
+            AND pending.published_at IS NULL
+        )
+          AND NOT EXISTS (
+            SELECT 1 FROM outbox_events AS recent
+            WHERE recent.topic = candidate.topic
+              AND recent.aggregate_id = candidate.id
+              AND recent.published_at >= now()
+                - ${staleSeconds} * interval '1 second'
+          )
+        RETURNING id
+      `;
+      return rows.length;
+    });
+  }
+
   public async completeJobOutboxEvent(
     id: string,
     claimToken: string,

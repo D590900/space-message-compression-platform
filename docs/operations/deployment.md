@@ -23,7 +23,7 @@ Set the GitHub Actions repository variable `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` t
 - Private S3-compatible bucket with TLS, server-side encryption, blocked public access and lifecycle controls.
 - Optional OTLP/Prometheus collectors on private or authenticated endpoints.
 
-Valkey is transport, not the system of record. PostgreSQL remains authoritative for accepted jobs, idempotency, quotas, plans, audit events and delivery state.
+Valkey is transport, not the system of record. PostgreSQL remains authoritative for accepted jobs, idempotency, quotas, plans, audit events and delivery state. The API reconstructs missing outbox deliveries for safely replayable `PENDING` and `FAILED_RETRYABLE` work after the configured stale interval.
 
 ## Secrets and configuration
 
@@ -66,6 +66,6 @@ Before accepting traffic, run a real Clerk organization session → scoped API k
 
 ## Backup and recovery
 
-Back up PostgreSQL and object storage under coordinated retention policies. Valkey stream loss may delay work but must not erase authoritative job records; reconciliation should re-enqueue accepted non-terminal records. Test capsule recovery from downloaded bytes and the reconstruction manifest independently of the live service.
+Back up PostgreSQL and object storage under coordinated retention policies. Valkey stream loss may delay work but does not erase authoritative job records; automatic reconciliation re-enqueues pending or retryable records without duplicating recent or currently running deliveries. Test capsule recovery from downloaded bytes and the reconstruction manifest independently of the live service.
 
 Original retention is controlled by `DELETE_ORIGINALS_AFTER_SECONDS`. Zero means deletion after successful verification; any longer interval must be justified against data-minimization requirements.

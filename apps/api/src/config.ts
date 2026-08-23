@@ -63,6 +63,18 @@ const configSchema = z
       .min(100)
       .max(60_000)
       .default(250),
+    JOB_OUTBOX_RECONCILE_MS: z.coerce
+      .number()
+      .int()
+      .min(1_000)
+      .max(3_600_000)
+      .default(60_000),
+    JOB_OUTBOX_STALE_MS: z.coerce
+      .number()
+      .int()
+      .min(60_000)
+      .max(86_400_000)
+      .default(1_800_000),
     WEBHOOK_SECRET_ENCRYPTION_KEY: z.string().refine((value) => {
       try {
         return Buffer.from(value, "base64").length === 32;
