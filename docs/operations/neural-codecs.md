@@ -140,11 +140,10 @@ Workflow runs `32675477049` and `32675478194` rebuilt the pinned sources on Linu
 - `ghcr.io/d590900/smcp-coolchic-runtime@sha256:606962ae27366101361ccf555aa6664bd1a128719085a815eb398edd22e714dc`
 - `ghcr.io/d590900/smcp-hinerv-runtime@sha256:f85cac0ea6fa2fa150ac1da882b18d64b91189a6ff4775750d7e5c61059f5bfa`
 
-The derived workers need no model-cache mount. Use the convenience tags for evaluation and replace them with the worker digest recorded by the publication workflow in production:
+The derived worker contains both runtimes so every consumer evaluates the same candidate set; splitting them across consumers in one Redis group is unsupported. It needs no model-cache mount. Use the convenience tag for evaluation and replace it with the worker digest recorded by the publication workflow in production:
 
 ```console
-docker run --rm ghcr.io/d590900/smcp-worker-coolchic:coolchic-a6fe38a414dd
-docker run --rm ghcr.io/d590900/smcp-worker-hinerv:hinerv-fdb92ec22492
+docker run --rm ghcr.io/d590900/smcp-worker-overfit-neural:coolchic-a6fe38a414dd-hinerv-fdb92ec22492
 ```
 
 Historical artifacts must be routed to the worker whose runtime digest matches the persisted manifest. A worker fails closed when the required digest differs from its active runtime.
