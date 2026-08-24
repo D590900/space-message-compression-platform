@@ -83,11 +83,22 @@ def test_committed_model_catalog_records_audited_neural_artifacts() -> None:
         "spade_generator.pth",
         "warping_module.pth",
     ]
-    assert all(
-        not model.enabled and model.license_weights.startswith("UNKNOWN")
-        for model in catalog.models
-        if model.id in {"compressai", "mlvc", "dcvc"}
-    )
+    coolchic = by_id["coolchic-image"]
+    assert not coolchic.enabled
+    assert coolchic.weights_origin == "per_asset"
+    assert coolchic.license_weights_evidence is not None
+    assert not coolchic.license_weights.startswith("UNKNOWN")
+    coolchic_video = by_id["coolchic-video"]
+    assert not coolchic_video.enabled
+    assert coolchic_video.weights_origin == "per_asset"
+    assert coolchic_video.license_weights_evidence is not None
+    assert not coolchic_video.license_weights.startswith("UNKNOWN")
+    hinerv = by_id["hinerv-video"]
+    assert not hinerv.enabled
+    assert hinerv.weights_origin == "per_asset"
+    assert hinerv.license_weights_evidence is not None
+    assert not hinerv.license_weights.startswith("UNKNOWN")
+    assert not any(model.license_weights.startswith("UNKNOWN") for model in catalog.models)
 
 
 def test_enabled_model_requires_complete_weight_and_decoder_provenance() -> None:
@@ -111,6 +122,58 @@ def test_enabled_model_requires_complete_weight_and_decoder_provenance() -> None
     }
     with pytest.raises(ValidationError, match="enabled model is missing"):
         ModelCatalog.model_validate_json(json.dumps(payload))
+
+
+def test_enabled_per_asset_model_needs_no_external_checkpoint() -> None:
+    manifest = ModelManifest.model_validate(
+        {
+            "id": "per-asset-example",
+            "codec_id": "image.per-asset-example",
+            "version": "1",
+            "source": "https://example.invalid/source",
+            "code_commit": "a" * 40,
+            "license_code": "BSD-3-Clause",
+            "license_code_evidence": "https://example.invalid/license",
+            "license_weights": "BSD-3-Clause; generated per asset",
+            "weights_origin": "per_asset",
+            "license_weights_evidence": "https://example.invalid/license",
+            "input_contract": "one bounded RGB image",
+            "decoder_image_digest": f"sha256:{'b' * 64}",
+            "adapter_entrypoint": "example:Adapter",
+            "enabled": True,
+            "install_hint": "use the pinned runtime",
+        }
+    )
+
+    assert manifest.weights_url is None
+    assert manifest.config_url is None
+    with pytest.raises(ValueError, match="do not download weights"):
+        fetch_weights(manifest, Path("unused"))
+
+
+def test_per_asset_model_rejects_external_checkpoint_fields() -> None:
+    with pytest.raises(ValidationError, match="cannot declare external weights"):
+        ModelManifest.model_validate(
+            {
+                "id": "per-asset-example",
+                "codec_id": "image.per-asset-example",
+                "version": "1",
+                "source": "https://example.invalid/source",
+                "code_commit": "a" * 40,
+                "license_code": "BSD-3-Clause",
+                "license_code_evidence": "https://example.invalid/license",
+                "license_weights": "BSD-3-Clause; generated per asset",
+                "weights_origin": "per_asset",
+                "license_weights_evidence": "https://example.invalid/license",
+                "weights_url": "https://example.invalid/checkpoint.bin",
+                "weights_sha256": "a" * 64,
+                "input_contract": "one bounded RGB image",
+                "decoder_image_digest": f"sha256:{'b' * 64}",
+                "adapter_entrypoint": "example:Adapter",
+                "enabled": True,
+                "install_hint": "use the pinned runtime",
+            }
+        )
 
 
 def test_catalog_retains_multiple_versions_for_persisted_decoder_selection() -> None:
@@ -208,12 +271,16 @@ def test_multi_artifact_fetch_verifies_each_file(
                 {
                     "name": "feature.pth",
                     "url": "https://example.invalid/feature.pth",
-                    "sha256": hashlib.sha256(bodies["https://example.invalid/feature.pth"]).hexdigest(),
+                    "sha256": hashlib.sha256(
+                        bodies["https://example.invalid/feature.pth"]
+                    ).hexdigest(),
                 },
                 {
                     "name": "motion.pth",
                     "url": "https://example.invalid/motion.pth",
-                    "sha256": hashlib.sha256(bodies["https://example.invalid/motion.pth"]).hexdigest(),
+                    "sha256": hashlib.sha256(
+                        bodies["https://example.invalid/motion.pth"]
+                    ).hexdigest(),
                 },
             ],
             "config_url": "https://example.invalid/config.yaml",

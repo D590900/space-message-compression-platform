@@ -41,8 +41,10 @@ from smcp_worker.adapters.external import run
 from smcp_worker.adapters.image import (
     AvifImageAdapter,
     CodLiteImageAdapter,
+    CoolChicImageAdapter,
     JpegXlImageAdapter,
     cod_lite_manifest_for_version,
+    coolchic_manifest_for_version,
     generate_image_candidates,
 )
 from smcp_worker.adapters.text import (
@@ -52,8 +54,12 @@ from smcp_worker.adapters.text import (
 )
 from smcp_worker.adapters.video import (
     Av1VideoAdapter,
+    CoolChicVideoAdapter,
+    HiNervVideoAdapter,
     LivePortraitVideoAdapter,
+    coolchic_video_manifest_for_version,
     generate_video_candidates,
+    hinerv_manifest_for_version,
     liveportrait_manifest_for_version,
 )
 from smcp_worker.capabilities import all_capabilities
@@ -305,9 +311,7 @@ class CompressionWorker:
             finally:
                 JOB_DURATION.labels(job_type=job_type).observe(time.perf_counter() - started)
 
-    def _acknowledge(
-        self, stream: str, message_id: str, job_id: str | None = None
-    ) -> None:
+    def _acknowledge(self, stream: str, message_id: str, job_id: str | None = None) -> None:
         """Atomically acknowledge a terminal message and remove its delivery marker."""
         topic = {
             COMPRESSION_STREAM: "compression.requested",
@@ -995,6 +999,15 @@ class CompressionWorker:
                     )
                     return
                 decoded = CodLiteImageAdapter(manifest=manifest).decode(candidate)
+            elif candidate.codec_id == "image.coolchic":
+                try:
+                    manifest = coolchic_manifest_for_version(candidate.codec_version)
+                except LookupError:
+                    self._terminal_decompression_failure(
+                        connection, decompression_id, tenant_subject, "DECODER_UNAVAILABLE"
+                    )
+                    return
+                decoded = CoolChicImageAdapter(manifest=manifest).decode(candidate)
             elif candidate.codec_id == "audio.opus":
                 decoded = OpusAudioAdapter().decode(candidate)
             elif candidate.codec_id == "audio.snac":
@@ -1026,6 +1039,24 @@ class CompressionWorker:
                 decoded = EncodecAudioAdapter(manifest=manifest).decode(candidate)
             elif candidate.codec_id == "video.av1":
                 decoded = Av1VideoAdapter().decode(candidate)
+            elif candidate.codec_id == "video.coolchic":
+                try:
+                    manifest = coolchic_video_manifest_for_version(candidate.codec_version)
+                except LookupError:
+                    self._terminal_decompression_failure(
+                        connection, decompression_id, tenant_subject, "DECODER_UNAVAILABLE"
+                    )
+                    return
+                decoded = CoolChicVideoAdapter(manifest=manifest).decode(candidate)
+            elif candidate.codec_id == "video.hinerv":
+                try:
+                    manifest = hinerv_manifest_for_version(candidate.codec_version)
+                except LookupError:
+                    self._terminal_decompression_failure(
+                        connection, decompression_id, tenant_subject, "DECODER_UNAVAILABLE"
+                    )
+                    return
+                decoded = HiNervVideoAdapter(manifest=manifest).decode(candidate)
             elif candidate.codec_id == "video.liveportrait":
                 try:
                     manifest = liveportrait_manifest_for_version(candidate.codec_version)
@@ -1266,11 +1297,14 @@ class CompressionWorker:
             "text.zstandard": "application/zstd",
             "image.avif": "image/avif",
             "image.jpeg-xl": "image/jxl",
+            "image.coolchic": "application/vnd.smcp.coolchic",
             "audio.opus": "audio/ogg; codecs=opus",
             "audio.snac": "application/vnd.smcp.snac",
             "audio.mimi": "application/vnd.smcp.mimi",
             "audio.encodec": "application/vnd.smcp.encodec",
             "video.av1": "video/x-matroska; codecs=av1,opus",
+            "video.coolchic": "application/vnd.smcp.coolchic-video",
+            "video.hinerv": "application/vnd.smcp.hinerv",
             "video.liveportrait": "application/vnd.smcp.liveportrait",
         }.get(codec_id, "application/vnd.smcp.candidate")
 
@@ -1281,11 +1315,14 @@ class CompressionWorker:
             "text.zstandard": "text/plain; charset=utf-8",
             "image.avif": "image/png",
             "image.jpeg-xl": "image/png",
+            "image.coolchic": "image/png",
             "audio.opus": "audio/wav",
             "audio.snac": "audio/wav",
             "audio.mimi": "audio/wav",
             "audio.encodec": "audio/wav",
             "video.av1": "video/x-msvideo; codecs=ffv1,pcm_s16le",
+            "video.coolchic": "video/x-msvideo; codecs=ffv1,pcm_s16le",
+            "video.hinerv": "video/x-msvideo; codecs=ffv1,pcm_s16le",
             "video.liveportrait": "video/x-msvideo; codecs=ffv1,pcm_s16le",
         }.get(codec_id, "application/octet-stream")
 

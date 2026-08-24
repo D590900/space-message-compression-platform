@@ -9,12 +9,23 @@ from smcp_worker.adapters.external import executable, run
 from smcp_worker.adapters.image import (
     AvifImageAdapter,
     CodLiteImageAdapter,
+    CoolChicImageAdapter,
     JpegXlImageAdapter,
     cod_lite_manifest_for_version,
+    coolchic_manifest_for_version,
     generate_image_candidates,
 )
+from smcp_worker.coolchic_runtime import KIND_IMAGE, pack_container
+from smcp_worker.coolchic_runtime import unpack_container as unpack_coolchic_container
 from smcp_worker.model_manifest import load_catalog
-from smcp_worker.models import CodecCapabilities, EncodeParams, PreparedInput, Profile, SourceObject
+from smcp_worker.models import (
+    CodecCapabilities,
+    EncodedCandidate,
+    EncodeParams,
+    PreparedInput,
+    Profile,
+    SourceObject,
+)
 
 
 @pytest.fixture
@@ -167,6 +178,127 @@ def test_cod_lite_decoder_manifest_is_resolved_by_persisted_version(tmp_path: Pa
         cod_lite_manifest_for_version("missing-version", catalog_path)
 
 
+def test_coolchic_wraps_pinned_per_asset_runtime(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    (source_root / "cc_encode.py").write_text("# pinned encoder\n", encoding="utf-8")
+    (source_root / "cc_decode.py").write_text("# pinned decoder\n", encoding="utf-8")
+    catalog_manifest = next(
+        model
+        for model in load_catalog(Path("model-manifests/catalog.json")).models
+        if model.id == "coolchic-image"
+    )
+    manifest = catalog_manifest.model_copy(
+        update={
+            "enabled": True,
+            "disabled_reason": None,
+            "decoder_image_digest": f"sha256:{'a' * 64}",
+            "adapter_entrypoint": "smcp_worker.adapters.image:CoolChicImageAdapter",
+        }
+    )
+    adapter = CoolChicImageAdapter(manifest, source_root)
+    monkeypatch.setattr(
+        "smcp_worker.adapters.image.coolchic_manifest_for_version", lambda _version: manifest
+    )
+    payload = pack_container(b"coolchic-bitstream", KIND_IMAGE)
+
+    monkeypatch.setattr(adapter, "supports_prepared", lambda _prepared: True)
+
+    def fake_transform(
+        source: bytes,
+        _input_suffix: str,
+        _output_suffix: str,
+        command: tuple[str, ...],
+        *,
+        timeout: int = 300,
+        cwd: Path | None = None,
+    ) -> bytes:
+        assert source
+        assert cwd is None
+        if "encode-image" in command:
+            assert timeout == 7_200
+            assert "--iterations" in command
+            return payload
+        assert timeout == 600
+        return b"decoded-png"
+
+    monkeypatch.setattr("smcp_worker.adapters.image.transform", fake_transform)
+    candidate = adapter.encode(PreparedInput(b"png", b"png", "image/png"), EncodeParams(level=1))
+
+    assert candidate.payload == payload
+    assert candidate.config["weights_origin"] == "per_asset_embedded"
+    assert adapter.decode(candidate) == b"decoded-png"
+
+
+def test_coolchic_decoder_manifest_is_resolved_by_persisted_version(tmp_path: Path) -> None:
+    payload = json.loads(Path("model-manifests/catalog.json").read_text(encoding="utf-8"))
+    current = next(model for model in payload["models"] if model["id"] == "coolchic-image")
+    historical = {**current, "version": "historical-test-vector"}
+    payload["models"].append(historical)
+    catalog_path = tmp_path / "catalog.json"
+    catalog_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    resolved = coolchic_manifest_for_version("historical-test-vector", catalog_path)
+
+    assert resolved.version == "historical-test-vector"
+    with pytest.raises(LookupError, match="persisted version"):
+        coolchic_manifest_for_version("missing-version", catalog_path)
+
+
+def test_coolchic_decode_rejects_a_different_historical_runtime(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    current = next(
+        model
+        for model in load_catalog(Path("model-manifests/catalog.json")).models
+        if model.id == "coolchic-image"
+    ).model_copy(
+        update={
+            "enabled": True,
+            "disabled_reason": None,
+            "decoder_image_digest": f"sha256:{'a' * 64}",
+            "adapter_entrypoint": "smcp_worker.adapters.image:CoolChicImageAdapter",
+        }
+    )
+    historical = current.model_copy(
+        update={
+            "version": "historical-test-vector",
+            "decoder_image_digest": f"sha256:{'b' * 64}",
+        }
+    )
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    (source_root / "cc_encode.py").write_text("# encoder\n", encoding="utf-8")
+    (source_root / "cc_decode.py").write_text("# decoder\n", encoding="utf-8")
+    adapter = CoolChicImageAdapter(current, source_root)
+    monkeypatch.setattr(
+        "smcp_worker.adapters.image.coolchic_manifest_for_version",
+        lambda _version: historical,
+    )
+
+    with pytest.raises(RuntimeError, match="digest-pinned historical worker"):
+        adapter.decode(
+            EncodedCandidate(
+                current.codec_id,
+                historical.version,
+                {},
+                pack_container(b"historical", KIND_IMAGE),
+            )
+        )
+
+
+def test_coolchic_container_rejects_corruption_and_trailing_data() -> None:
+    payload = pack_container(b"bounded-bitstream", KIND_IMAGE)
+
+    assert unpack_coolchic_container(payload, KIND_IMAGE) == b"bounded-bitstream"
+    with pytest.raises(ValueError, match="digest mismatch"):
+        unpack_coolchic_container(payload[:-1] + bytes([payload[-1] ^ 1]), KIND_IMAGE)
+    with pytest.raises(ValueError, match="length mismatch"):
+        unpack_coolchic_container(payload + b"trailing", KIND_IMAGE)
+
+
 def test_cod_lite_is_not_generated_for_faithful_profile(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -199,6 +331,7 @@ def test_cod_lite_is_not_generated_for_faithful_profile(
     monkeypatch.setattr("smcp_worker.adapters.image.AvifImageAdapter", DisabledAdapter)
     monkeypatch.setattr("smcp_worker.adapters.image.JpegXlImageAdapter", DisabledAdapter)
     monkeypatch.setattr("smcp_worker.adapters.image.CodLiteImageAdapter", SemanticOnlyAdapter)
+    monkeypatch.setattr("smcp_worker.adapters.image.CoolChicImageAdapter", DisabledAdapter)
 
     assert (
         generate_image_candidates(

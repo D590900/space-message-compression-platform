@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import os
 import re
@@ -20,7 +21,8 @@ from smcp_worker.adapters.external import (
     transform,
     version_line,
 )
-from smcp_worker.model_manifest import ModelManifest, load_catalog
+from smcp_worker.coolchic_runtime import MAGIC as COOLCHIC_MAGIC
+from smcp_worker.model_manifest import ModelManifest, load_catalog, require_decoder_runtime
 from smcp_worker.models import (
     CodecCapabilities,
     EncodedCandidate,
@@ -47,6 +49,20 @@ def cod_lite_manifest_for_version(
     ]
     if len(matches) != 1:
         raise LookupError(f"no unique CoD-Lite manifest for persisted version {version!r}")
+    return matches[0]
+
+
+def coolchic_manifest_for_version(
+    version: str, catalog_path: Path = MODEL_CATALOG
+) -> ModelManifest:
+    """Resolve the immutable manifest belonging to a persisted Cool-Chic image."""
+    matches = [
+        model
+        for model in load_catalog(catalog_path).models
+        if model.codec_id == "image.coolchic" and model.version == version
+    ]
+    if len(matches) != 1:
+        raise LookupError(f"no unique Cool-Chic manifest for persisted version {version!r}")
     return matches[0]
 
 
@@ -426,6 +442,144 @@ class CodLiteImageAdapter(ImageAdapterMixin):
         return decoded
 
 
+class CoolChicImageAdapter(ImageAdapterMixin):
+    """Per-image overfit codec with all decoder parameters embedded in the bitstream."""
+
+    def __init__(
+        self, manifest: ModelManifest | None = None, source_root: Path | None = None
+    ) -> None:
+        self.manifest = manifest or next(
+            model for model in load_catalog(MODEL_CATALOG).models if model.id == "coolchic-image"
+        )
+        self.source_root = source_root or Path(
+            os.environ.get("SMCP_COOLCHIC_ROOT", "/opt/coolchic")
+        )
+        self.python_executable = os.environ.get("SMCP_COOLCHIC_PYTHON", sys.executable)
+
+    def capabilities(self) -> CodecCapabilities:
+        if not self.manifest.enabled:
+            return CodecCapabilities(
+                codec_id=self.manifest.codec_id,
+                codec_version=self.manifest.version,
+                content_types=("IMAGE",),
+                profiles=(Profile.ULTRA,),
+                enabled=False,
+                deterministic=True,
+                disabled_reason=self.manifest.disabled_reason,
+                install_hint=self.manifest.install_hint,
+            )
+        required = (self.source_root / "cc_encode.py", self.source_root / "cc_decode.py")
+        missing = [str(path) for path in required if not path.is_file()]
+        return CodecCapabilities(
+            codec_id=self.manifest.codec_id,
+            codec_version=self.manifest.version,
+            content_types=("IMAGE",),
+            profiles=(Profile.ULTRA,),
+            enabled=not missing,
+            deterministic=True,
+            disabled_reason=(
+                f"required pinned Cool-Chic source is missing: {', '.join(missing)}"
+                if missing
+                else None
+            ),
+            install_hint=self.manifest.install_hint if missing else None,
+        )
+
+    @staticmethod
+    def supports_prepared(prepared: PreparedInput) -> bool:
+        if prepared.canonical_bytes is None:
+            return False
+        with tempfile.TemporaryDirectory(prefix="smcp-coolchic-support-") as directory:
+            path = Path(directory) / "input.png"
+            path.write_bytes(prepared.canonical_bytes)
+            try:
+                report = json.loads(
+                    run(
+                        (
+                            "ffprobe",
+                            "-v",
+                            "error",
+                            "-select_streams",
+                            "v:0",
+                            "-show_entries",
+                            "stream=width,height",
+                            "-of",
+                            "json",
+                            str(path),
+                        ),
+                        timeout=30,
+                    ).stdout
+                )
+                stream = report["streams"][0]
+                width, height = int(stream["width"]), int(stream["height"])
+            except (KeyError, IndexError, ValueError, subprocess.SubprocessError):
+                return False
+        return 32 <= width <= 2_048 and 32 <= height <= 2_048
+
+    def _command(
+        self, mode: str, input_path: Path, output_path: Path, *, level: int = 1
+    ) -> tuple[str, ...]:
+        command = (
+            self.python_executable,
+            "-m",
+            "smcp_worker.coolchic_runtime",
+            mode,
+            "--source-root",
+            str(self.source_root),
+            "--input",
+            str(input_path),
+            "--output",
+            str(output_path),
+        )
+        if mode == "encode-image":
+            lmbda = {1: "0.003", 2: "0.001", 3: "0.0003"}.get(level)
+            if lmbda is None:
+                raise ValueError("Cool-Chic level must be 1, 2 or 3")
+            return (*command, "--iterations", "2000", "--lambda", lmbda)
+        return command
+
+    def encode(self, prepared: PreparedInput, params: EncodeParams) -> EncodedCandidate:
+        capability = self.capabilities()
+        if not capability.enabled or prepared.canonical_bytes is None:
+            raise RuntimeError(capability.disabled_reason or "canonical image is missing")
+        if not self.supports_prepared(prepared):
+            raise ValueError("image is outside the bounded Cool-Chic input contract")
+        payload = transform(
+            prepared.canonical_bytes,
+            ".png",
+            ".smcpcc",
+            self._command("encode-image", Path("{input}"), Path("{output}"), level=params.level),
+            timeout=7_200,
+        )
+        if not payload.startswith(COOLCHIC_MAGIC):
+            raise ValueError("Cool-Chic produced an invalid SMCP container")
+        return EncodedCandidate(
+            self.manifest.codec_id,
+            self.manifest.version,
+            {
+                "level": params.level,
+                "iterations": 2_000,
+                "weights_origin": "per_asset_embedded",
+                "source_commit": self.manifest.code_commit,
+            },
+            payload,
+        )
+
+    def decode(self, candidate: EncodedCandidate) -> bytes:
+        persisted_manifest = coolchic_manifest_for_version(candidate.codec_version)
+        require_decoder_runtime(persisted_manifest, self.manifest)
+        capability = self.capabilities()
+        if not capability.enabled:
+            raise RuntimeError(capability.disabled_reason)
+        return transform(
+            candidate.payload,
+            ".smcpcc",
+            ".png",
+            self._command("decode-image", Path("{input}"), Path("{output}")),
+            timeout=600,
+        )
+
+
 def _metric(original: bytes, decoded: bytes, filter_name: str, pattern: str) -> float:
     with tempfile.TemporaryDirectory(prefix="smcp-metric-") as directory:
         root = Path(directory)
@@ -484,6 +638,7 @@ def generate_image_candidates(
         (AvifImageAdapter(), (20, 32, 44)),
         (JpegXlImageAdapter(), (5, 10, 20)),
         (CodLiteImageAdapter(), (312,)),
+        (CoolChicImageAdapter(), (1,)),
     )
     candidates: list[tuple[EncodedCandidate, QualityReport]] = []
     for adapter, levels in adapters_and_levels:

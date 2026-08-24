@@ -77,7 +77,7 @@ describe("system capability routes", () => {
             capability: { profiles: ["faithful", "ultra"] },
           },
           {
-            id: "image.compressai",
+            id: "image.coolchic",
             version: "unavailable",
             content_type: "IMAGE",
             implementation_sha256: "cd".repeat(32),
@@ -114,7 +114,7 @@ describe("system capability routes", () => {
       data: [
         { id: "image.avif", enabled: true },
         {
-          id: "image.compressai",
+          id: "image.coolchic",
           enabled: false,
           disabled_reason: "no verified weights",
         },

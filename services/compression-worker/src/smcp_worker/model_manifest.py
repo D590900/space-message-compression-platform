@@ -9,7 +9,7 @@ import os
 import re
 import tempfile
 from pathlib import Path
-from typing import Self
+from typing import Literal, Self
 
 import requests
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
@@ -55,6 +55,7 @@ class ModelManifest(BaseModel):
     license_code: str = Field(min_length=1, max_length=120)
     license_code_evidence: HttpUrl
     license_weights: str = Field(min_length=1, max_length=200)
+    weights_origin: Literal["external_checkpoint", "per_asset"] = "external_checkpoint"
     license_weights_evidence: HttpUrl | None = None
     weights_url: HttpUrl | None = None
     weights_sha256: str | None = None
@@ -101,16 +102,34 @@ class ModelManifest(BaseModel):
         if self.enabled:
             required = {
                 "license_weights_evidence": self.license_weights_evidence,
-                "config_url": self.config_url,
-                "config_sha256": self.config_sha256,
                 "decoder_image_digest": self.decoder_image_digest,
                 "adapter_entrypoint": self.adapter_entrypoint,
             }
+            if self.weights_origin == "external_checkpoint":
+                required.update(
+                    {"config_url": self.config_url, "config_sha256": self.config_sha256}
+                )
             missing = sorted(name for name, value in required.items() if value is None)
             if missing:
                 raise ValueError(f"enabled model is missing: {', '.join(missing)}")
-            if self.weights_url is None and not self.weight_artifacts:
+            if (
+                self.weights_origin == "external_checkpoint"
+                and self.weights_url is None
+                and not self.weight_artifacts
+            ):
                 raise ValueError("enabled model is missing weights provenance")
+            if self.weights_origin == "per_asset" and any(
+                value is not None
+                for value in (
+                    self.weights_url,
+                    self.weights_sha256,
+                    self.config_url,
+                    self.config_sha256,
+                )
+            ):
+                raise ValueError(
+                    "per-asset models cannot declare external weights or configuration"
+                )
             if self.license_weights.upper().startswith("UNKNOWN"):
                 raise ValueError("enabled model weights must have verified license terms")
             if self.disabled_reason is not None:
@@ -142,10 +161,24 @@ def load_catalog(path: Path) -> ModelCatalog:
     return ModelCatalog.model_validate_json(path.read_text(encoding="utf-8"))
 
 
+def require_decoder_runtime(persisted: ModelManifest, active: ModelManifest) -> None:
+    """Fail closed unless this process is the exact decoder image for a bitstream."""
+    expected = persisted.decoder_image_digest
+    actual = active.decoder_image_digest
+    if expected is None or actual is None or expected != actual:
+        raise RuntimeError(
+            f"persisted {persisted.codec_id} version {persisted.version} requires decoder "
+            f"runtime {expected or 'unpublished'}; active runtime is {actual or 'unpublished'}; "
+            "route the decode job to the digest-pinned historical worker"
+        )
+
+
 def fetch_weights(
     manifest: ModelManifest, cache_root: Path, max_bytes: int = 10_737_418_240
 ) -> Path:
     """Explicitly download one enabled model's weights and configuration."""
+    if manifest.weights_origin != "external_checkpoint":
+        raise ValueError("per-asset models do not download weights")
     if max_bytes <= 0:
         raise ValueError("max_bytes must be positive")
     if (
