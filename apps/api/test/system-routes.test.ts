@@ -77,7 +77,7 @@ describe("system capability routes", () => {
             capability: { profiles: ["faithful", "ultra"] },
           },
           {
-            id: "image.compressai",
+            id: "image.coolchic",
             version: "unavailable",
             content_type: "IMAGE",
             implementation_sha256: "cd".repeat(32),
@@ -114,7 +114,7 @@ describe("system capability routes", () => {
       data: [
         { id: "image.avif", enabled: true },
         {
-          id: "image.compressai",
+          id: "image.coolchic",
           enabled: false,
           disabled_reason: "no verified weights",
         },
@@ -161,6 +161,59 @@ describe("system capability routes", () => {
       "/v1/compressions",
       "success",
     );
+  });
+
+  it("accepts semantic jobs only when the runtime registry exposes the profile", async () => {
+    const createCompressionJob = vi.fn(() =>
+      Promise.resolve({
+        created: true,
+        job: { id: "semantic-job", status: "PENDING" },
+      }),
+    );
+    const database = {
+      listCodecCapabilities: () =>
+        Promise.resolve([
+          {
+            id: "image.cod-lite",
+            version: "bpp-0.0312-hf-cfda8135320f",
+            content_type: "IMAGE",
+            implementation_sha256: "ab".repeat(32),
+            deterministic: false,
+            enabled: true,
+            disabled_reason: null,
+            capability: { profiles: ["ultra", "semantic"] },
+          },
+        ]),
+      createCompressionJob,
+      auditApiKeyUsage: () => Promise.resolve(),
+      close: () => Promise.resolve(),
+    } as unknown as Database;
+    const { app } = await buildApp(config, {
+      database,
+      queue: { close: () => Promise.resolve() } as unknown as JobQueue,
+      storage: {} as ObjectStorage,
+      clerk,
+      rateLimiter,
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/compressions",
+      headers: {
+        authorization: "Bearer test-key",
+        "idempotency-key": "semantic-profile-enabled-0001",
+      },
+      payload: {
+        project_id: "85bd5e09-a8fb-4d2c-a560-5d2365badf84",
+        source_object_id: "2d0610bd-4567-41ab-9a7a-8a5fd320c7ce",
+        input_type: "IMAGE",
+        profile: "semantic",
+      },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(createCompressionJob).toHaveBeenCalledOnce();
   });
 
   it("accepts an authenticated organization session without exposing an API key", async () => {
