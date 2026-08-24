@@ -35,9 +35,7 @@ export type WebhookCreate = {
   project_id: string;
   url: string;
   event_types: (
-    | "compression.completed"
-    | "decompression.completed"
-    | "capsule.completed"
+    "compression.completed" | "decompression.completed" | "capsule.completed"
   )[];
 };
 
