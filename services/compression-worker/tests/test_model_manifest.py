@@ -84,17 +84,29 @@ def test_committed_model_catalog_records_audited_neural_artifacts() -> None:
         "warping_module.pth",
     ]
     coolchic = by_id["coolchic-image"]
-    assert not coolchic.enabled
+    assert coolchic.enabled
+    assert coolchic.decoder_image_digest == (
+        "sha256:606962ae27366101361ccf555aa6664bd1a128719085a815eb398edd22e714dc"
+    )
+    assert coolchic.adapter_entrypoint == "smcp_worker.adapters.image:CoolChicImageAdapter"
     assert coolchic.weights_origin == "per_asset"
     assert coolchic.license_weights_evidence is not None
     assert not coolchic.license_weights.startswith("UNKNOWN")
     coolchic_video = by_id["coolchic-video"]
-    assert not coolchic_video.enabled
+    assert coolchic_video.enabled
+    assert coolchic_video.decoder_image_digest == coolchic.decoder_image_digest
+    assert coolchic_video.adapter_entrypoint == (
+        "smcp_worker.adapters.video:CoolChicVideoAdapter"
+    )
     assert coolchic_video.weights_origin == "per_asset"
     assert coolchic_video.license_weights_evidence is not None
     assert not coolchic_video.license_weights.startswith("UNKNOWN")
     hinerv = by_id["hinerv-video"]
-    assert not hinerv.enabled
+    assert hinerv.enabled
+    assert hinerv.decoder_image_digest == (
+        "sha256:f85cac0ea6fa2fa150ac1da882b18d64b91189a6ff4775750d7e5c61059f5bfa"
+    )
+    assert hinerv.adapter_entrypoint == "smcp_worker.adapters.video:HiNervVideoAdapter"
     assert hinerv.weights_origin == "per_asset"
     assert hinerv.license_weights_evidence is not None
     assert not hinerv.license_weights.startswith("UNKNOWN")

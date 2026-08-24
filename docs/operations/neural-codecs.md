@@ -131,6 +131,24 @@ docker run --rm \
 
 Production deployments must replace the convenience worker tag with the exact digest from run `32656675384`: `ghcr.io/d590900/smcp-worker-encodec@sha256:7b8f5759360bb561f63f24aedf4f4ee587a0e47c4d6f1fa913a8e36085551494`. The downloaded workflow artifact matched the GHCR manifest digest, contained a valid SPDX 2.3 SBOM, and passed independent OCI provenance verification. The catalog pins the smaller runtime digest because it is the immutable decoding contract shared by derived workers.
 
+## Cool-Chic and HiNeRV per-asset runtimes
+
+Cool-Chic image, all-intra Cool-Chic video and HiNeRV video replace the checkpoint-blocked CompressAI, MLVC and DCVC entries. They do not download or load pretrained model weights: the encoder optimizes decoder parameters for each submitted asset and stores those quantized parameters inside the bounded, authenticated stream. Cool-Chic video is deliberately all-intra, excluding the optional RAFT checkpoint.
+
+Workflow runs `32675477049` and `32675478194` rebuilt the pinned sources on Linux/amd64, exercised deterministic offline encode/decode, rejected malformed containers, passed HIGH/CRITICAL Trivy scans, emitted SPDX 2.3 SBOMs and published provenance attestations. The catalog pins the exact decoding contracts:
+
+- `ghcr.io/d590900/smcp-coolchic-runtime@sha256:606962ae27366101361ccf555aa6664bd1a128719085a815eb398edd22e714dc`
+- `ghcr.io/d590900/smcp-hinerv-runtime@sha256:f85cac0ea6fa2fa150ac1da882b18d64b91189a6ff4775750d7e5c61059f5bfa`
+
+The derived workers need no model-cache mount. Use the convenience tags for evaluation and replace them with the worker digest recorded by the publication workflow in production:
+
+```console
+docker run --rm ghcr.io/d590900/smcp-worker-coolchic:coolchic-a6fe38a414dd
+docker run --rm ghcr.io/d590900/smcp-worker-hinerv:hinerv-fdb92ec22492
+```
+
+Historical artifacts must be routed to the worker whose runtime digest matches the persisted manifest. A worker fails closed when the required digest differs from its active runtime.
+
 ## LivePortrait detector-free approval and runtime publication
 
 The selected talking-head path uses only the four official human-model checkpoints from `KlingTeam/LivePortrait` revision `82a4fa6735ca58432b6ce39301b4b9ee066dea47`, whose immutable model card declares MIT terms, with source commit `9b294b3d0536135442ea73cb01e6cb3ca7029dd3`. The runtime deliberately excludes InsightFace, face detectors, landmark models, cropper code and retargeting checkpoints. Operators must supply a pre-aligned, single-person 512×512 RGB video of 2–30 frames, at no more than 30 fps or 30 seconds total duration; inputs outside that narrow contract remain eligible for AV1 instead. Optional audio is trimmed or silence-padded to the exact video duration before EnCodec inference.

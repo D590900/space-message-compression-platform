@@ -58,7 +58,7 @@ The default capsule budget is 2,000,000 bytes. `pad_to_budget` is opt-in. The da
 
 ## Optional codecs
 
-CoD-Lite, SNAC, Mimi, EnCodec and detector-free LivePortrait are enabled only in their optional digest-pinned workers after an operator places the explicitly fetched, checksum-verified artifacts in the immutable model cache. Cool-Chic image, all-intra Cool-Chic video and HiNeRV video replace CompressAI, MLVC and DCVC. These three train parameters on the submitted asset, carry those parameters inside the authenticated compressed stream and do not use the model cache or download checkpoints. They remain disabled until their scanned runtime images are published and recorded by immutable digest.
+CoD-Lite, SNAC, Mimi, EnCodec and detector-free LivePortrait are enabled only in their optional digest-pinned workers after an operator places the explicitly fetched, checksum-verified artifacts in the immutable model cache. Cool-Chic image, all-intra Cool-Chic video and HiNeRV video replace CompressAI, MLVC and DCVC. These three are enabled in optional digest-pinned CPU workers, train parameters on the submitted asset, carry those parameters inside the authenticated compressed stream, and neither use the model cache nor download checkpoints.
 
 The `semantic` profile remains part of the versioned API vocabulary, but job creation returns `422 semantic-profile-unavailable` until an enabled implementation includes its verified decoder and immutable weights in the reproducibility chain. The worker also terminalizes legacy queued semantic jobs with `SEMANTIC_PROFILE_UNAVAILABLE`; it never substitutes a baseline codec while claiming semantic reconstruction.
 

@@ -1,0 +1,141 @@
+name: Overfit neural workers
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/overfit-neural-workers.yml"
+      - "infra/docker/worker-coolchic/**"
+      - "infra/docker/worker-hinerv/**"
+      - "services/compression-worker/model-manifests/**"
+      - "services/compression-worker/src/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - worker: coolchic
+            version: coolchic-a6fe38a414dd
+            licenses: Apache-2.0 AND BSD-3-Clause
+          - worker: hinerv
+            version: hinerv-fdb92ec22492
+            licenses: Apache-2.0 AND MIT
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Configure Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - name: Normalize GHCR namespace
+        id: registry
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: echo "owner=${OWNER,,}" >> "$GITHUB_OUTPUT"
+      - name: Build digest-pinned worker image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: infra/docker/worker-${{ matrix.worker }}/Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            VERSION=${{ matrix.version }}
+          tags: smcp-worker-${{ matrix.worker }}:${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.worker }}-worker
+          cache-to: type=gha,mode=max,scope=${{ matrix.worker }}-worker
+      - name: Verify enabled catalog and image contract
+        env:
+          IMAGE: smcp-worker-${{ matrix.worker }}:${{ github.sha }}
+          EXPECTED_LICENSES: ${{ matrix.licenses }}
+          WORKER: ${{ matrix.worker }}
+        run: |
+          set -euo pipefail
+          [[ $(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$IMAGE") == "$GITHUB_SHA" ]]
+          [[ $(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.licenses" }}' "$IMAGE") == "$EXPECTED_LICENSES" ]]
+          [[ $(docker image inspect --format '{{ .Config.User }}' "$IMAGE") == smcp ]]
+          docker run --rm --entrypoint /opt/venv/bin/python "$IMAGE" -m smcp_worker.model_manifest validate \
+            /opt/worker/model-manifests/catalog.json
+          docker run --rm --entrypoint /opt/venv/bin/python "$IMAGE" -c \
+            "from smcp_worker.capabilities import all_capabilities; enabled = {item.codec_id for item in all_capabilities() if item.enabled}; expected = {'image.coolchic', 'video.coolchic'} if '$WORKER' == 'coolchic' else {'video.hinerv'}; assert expected <= enabled, (expected, enabled)"
+          host_source_hash=$(sha256sum services/compression-worker/src/smcp_worker/worker.py | cut -d' ' -f1)
+          image_source_hash=$(docker run --rm --entrypoint /usr/bin/sha256sum "$IMAGE" \
+            /opt/worker/src/smcp_worker/worker.py | cut -d' ' -f1)
+          [[ "$image_source_hash" == "$host_source_hash" ]]
+      - name: Scan candidate image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: smcp-worker-${{ matrix.worker }}:${{ github.sha }}
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Generate exact-image SPDX SBOM
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: smcp-worker-${{ matrix.worker }}:${{ github.sha }}
+          format: spdx-json
+          output: smcp-worker-${{ matrix.worker }}-${{ github.sha }}.spdx.json
+      - name: Sign in to GHCR
+        if: github.event_name == 'workflow_dispatch'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679fa # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish scanned worker without rebuilding
+        if: github.event_name == 'workflow_dispatch'
+        id: publish
+        env:
+          LOCAL_IMAGE: smcp-worker-${{ matrix.worker }}:${{ github.sha }}
+          IMAGE_NAME: ghcr.io/${{ steps.registry.outputs.owner }}/smcp-worker-${{ matrix.worker }}
+          VERSION: ${{ matrix.version }}
+          WORKER: ${{ matrix.worker }}
+        run: |
+          set -euo pipefail
+          docker tag "$LOCAL_IMAGE" "${IMAGE_NAME}:${VERSION}"
+          docker push "${IMAGE_NAME}:${VERSION}"
+          digest=$(docker image inspect --format '{{ index .RepoDigests 0 }}' "${IMAGE_NAME}:${VERSION}")
+          digest=${digest##*@}
+          [[ "$digest" == sha256:* ]]
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$digest" > "${WORKER}-worker-digest.txt"
+      - name: Attest exact worker provenance
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ghcr.io/${{ steps.registry.outputs.owner }}/smcp-worker-${{ matrix.worker }}
+          subject-digest: ${{ steps.publish.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+      - name: Attest exact worker SBOM
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ghcr.io/${{ steps.registry.outputs.owner }}/smcp-worker-${{ matrix.worker }}
+          subject-digest: ${{ steps.publish.outputs.digest }}
+          sbom-path: smcp-worker-${{ matrix.worker }}-${{ github.sha }}.spdx.json
+          push-to-registry: true
+          create-storage-record: false
+      - name: Upload worker audit artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.worker }}-worker-${{ github.sha }}
+          path: |
+            smcp-worker-${{ matrix.worker }}-${{ github.sha }}.spdx.json
+            ${{ matrix.worker }}-worker-digest.txt
+          if-no-files-found: ${{ github.event_name == 'workflow_dispatch' && 'error' || 'warn' }}
+          retention-days: 90
