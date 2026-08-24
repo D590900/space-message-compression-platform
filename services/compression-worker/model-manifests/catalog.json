@@ -13,9 +13,10 @@
       "weights_origin": "per_asset",
       "license_weights_evidence": "https://github.com/Orange-OpenSource/Cool-Chic/blob/a6fe38a414dd098b39c41636bd6e423626402f7e/LICENSE.txt",
       "input_contract": "One RGB image from 32x32 through 2048x2048; the encoder overfits a bounded decoder to that image and embeds all quantized neural parameters in the .cool bitstream; no external checkpoint is loaded",
-      "enabled": false,
-      "disabled_reason": "The audited Cool-Chic runtime has not yet been published and pinned by immutable decoder image digest",
-      "install_hint": "Publish the scanned Cool-Chic runtime, record its digest, then enable the optional overfit-image worker"
+      "decoder_image_digest": "sha256:606962ae27366101361ccf555aa6664bd1a128719085a815eb398edd22e714dc",
+      "adapter_entrypoint": "smcp_worker.adapters.image:CoolChicImageAdapter",
+      "enabled": true,
+      "install_hint": "Use the shared digest-pinned Cool-Chic and HiNeRV CPU worker; no model cache or external checkpoint is required"
     },
     {
       "id": "cod-lite",
@@ -109,9 +110,10 @@
       "weights_origin": "per_asset",
       "license_weights_evidence": "https://github.com/Orange-OpenSource/Cool-Chic/blob/a6fe38a414dd098b39c41636bd6e423626402f7e/LICENSE.txt",
       "input_contract": "One YUV420 video, even dimensions from 32x32 through 640x640, at most 32 frames and 60 fps; every frame is coded intra so RAFT and all other pretrained checkpoints are excluded; all quantized neural parameters are embedded in the .cool stream; optional audio is encoded as Opus",
-      "enabled": false,
-      "disabled_reason": "The audited Cool-Chic runtime has not yet been published and pinned by immutable decoder image digest",
-      "install_hint": "Publish the scanned Cool-Chic runtime, record its digest, then enable the optional overfit-video worker"
+      "decoder_image_digest": "sha256:606962ae27366101361ccf555aa6664bd1a128719085a815eb398edd22e714dc",
+      "adapter_entrypoint": "smcp_worker.adapters.video:CoolChicVideoAdapter",
+      "enabled": true,
+      "install_hint": "Use the shared digest-pinned Cool-Chic and HiNeRV CPU worker; no model cache or external checkpoint is required"
     },
     {
       "id": "hinerv-video",
@@ -125,9 +127,10 @@
       "weights_origin": "per_asset",
       "license_weights_evidence": "https://github.com/hmkx/HiNeRV/blob/fdb92ec22492246f800621dfd454f6a5c62ab75b/LICENSE",
       "input_contract": "One RGB video with dimensions divisible by 16 from 32x32 through 640x640, at most 32 frames and 60 fps; the encoder trains and quantizes a decoder for that video; no pretrained checkpoint is loaded; optional audio is encoded as Opus",
-      "enabled": false,
-      "disabled_reason": "The audited HiNeRV runtime has not yet been published and pinned by immutable decoder image digest",
-      "install_hint": "Publish the scanned HiNeRV runtime, record its digest, then enable the optional per-video worker"
+      "decoder_image_digest": "sha256:f85cac0ea6fa2fa150ac1da882b18d64b91189a6ff4775750d7e5c61059f5bfa",
+      "adapter_entrypoint": "smcp_worker.adapters.video:HiNervVideoAdapter",
+      "enabled": true,
+      "install_hint": "Use the shared digest-pinned Cool-Chic and HiNeRV CPU worker; no model cache or external checkpoint is required"
     },
     {
       "id": "liveportrait",
