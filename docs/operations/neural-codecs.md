@@ -146,6 +146,8 @@ The derived worker contains both runtimes so every consumer evaluates the same c
 docker run --rm ghcr.io/d590900/smcp-worker-overfit-neural:coolchic-a6fe38a414dd-hinerv-fdb92ec22492
 ```
 
+Production deployments must replace that convenience tag with the exact digest from run `32677327878`: `ghcr.io/d590900/smcp-worker-overfit-neural@sha256:6b6abc044598511a15550af2396ebde743a5553e40a04a4ed8acc5d65a3e8b60`. The downloaded workflow artifact matched the GHCR manifest digest and contained a valid SPDX 2.3 SBOM; independent OCI verification passed for both the repository-bound SLSA provenance and SPDX attestations.
+
 Historical artifacts must be routed to the worker whose runtime digest matches the persisted manifest. A worker fails closed when the required digest differs from its active runtime.
 
 ## LivePortrait detector-free approval and runtime publication
