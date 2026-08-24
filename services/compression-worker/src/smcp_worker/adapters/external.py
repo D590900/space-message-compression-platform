@@ -27,7 +27,7 @@ def version_line(command: Sequence[str]) -> str:
 
 
 def run(
-    command: Sequence[str], *, timeout: int = COMMAND_TIMEOUT_SECONDS
+    command: Sequence[str], *, timeout: int = COMMAND_TIMEOUT_SECONDS, cwd: Path | None = None
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(  # noqa: S603 - never invokes a shell
         command,
@@ -35,6 +35,7 @@ def run(
         capture_output=True,
         text=True,
         timeout=timeout,
+        cwd=cwd,
     )
 
 
@@ -43,6 +44,8 @@ def transform(
     input_suffix: str,
     output_suffix: str,
     command: Sequence[str],
+    *,
+    timeout: int = COMMAND_TIMEOUT_SECONDS,
 ) -> bytes:
     with tempfile.TemporaryDirectory(prefix="smcp-codec-") as directory:
         root = Path(directory)
@@ -53,7 +56,7 @@ def transform(
             part.replace("{input}", str(source)).replace("{output}", str(output))
             for part in command
         ]
-        run(resolved)
+        run(resolved, timeout=timeout)
         result = output.read_bytes()
         if not result:
             raise ValueError("codec produced an empty output")

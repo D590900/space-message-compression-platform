@@ -7,13 +7,13 @@ def test_optional_models_are_explicitly_disabled_without_verified_weights() -> N
     by_id = {capability.codec_id: capability for capability in capabilities}
 
     for codec_id in (
-        "image.compressai",
+        "image.coolchic",
         "image.cod-lite",
         "audio.snac",
         "audio.mimi",
         "audio.encodec",
-        "video.mlvc",
-        "video.dcvc",
+        "video.coolchic",
+        "video.hinerv",
         "video.liveportrait",
     ):
         capability = by_id[codec_id]

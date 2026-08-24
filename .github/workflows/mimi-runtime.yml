@@ -1,0 +1,170 @@
+name: Mimi runtime
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/mimi-runtime.yml"
+      - "infra/docker/mimi-runtime/**"
+      - "services/compression-worker/model-runtime/mimi-*"
+      - "services/compression-worker/src/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Configure Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - name: Normalize GHCR namespace
+        id: registry
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: echo "owner=${OWNER,,}" >> "$GITHUB_OUTPUT"
+      - name: Build exact runtime image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: infra/docker/mimi-runtime/Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            VERSION=mimi-24khz-89091b3e466e
+          tags: smcp-mimi-runtime:${{ github.sha }}
+          cache-from: type=gha,scope=mimi-runtime
+          cache-to: type=gha,mode=max,scope=mimi-runtime
+      - name: Verify runtime contract
+        env:
+          IMAGE: smcp-mimi-runtime:${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ $(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$IMAGE") == "$GITHUB_SHA" ]]
+          [[ $(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.licenses" }}' "$IMAGE") == "Apache-2.0 AND CC-BY-4.0" ]]
+          docker run --rm --entrypoint /opt/mimi-venv/bin/python "$IMAGE" -c \
+            "import torch, transformers; from transformers import MimiModel; from smcp_worker.mimi_runtime import unpack_tokens; assert torch.__version__ == '2.6.0+cpu'; assert transformers.__version__ == '5.5.0'; assert MimiModel; assert unpack_tokens"
+          docker run --rm --entrypoint /bin/sh "$IMAGE" -c \
+            'test ! -e /var/lib/smcp/models/mimi && test ! -e /usr/bin/uv && test ! -e /usr/bin/uvx'
+      - name: Fetch and verify approved test artifacts
+        env:
+          IMAGE: smcp-mimi-runtime:${{ github.sha }}
+        run: |
+          set -euo pipefail
+          install -d -m 0700 /tmp/mimi-model
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output /tmp/mimi-model/weights.bin \
+            https://huggingface.co/kyutai/mimi/resolve/89091b3e466eb6a9d11e537bf26b144f194978f7/model.safetensors
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output /tmp/mimi-model/config.yaml \
+            https://huggingface.co/kyutai/mimi/resolve/89091b3e466eb6a9d11e537bf26b144f194978f7/config.json
+          echo 'bac7e85083dcded655d24eaadde7e6eea34c0da1b35fa2d284e641bd2b942a5e  /tmp/mimi-model/weights.bin' | sha256sum --check --strict
+          echo 'aca6f44b04f7bc2e7466b71597d2d51e463ed1cf3cd7025d8848595580546c36  /tmp/mimi-model/config.yaml' | sha256sum --check --strict
+          uid=$(docker run --rm --entrypoint /usr/bin/id "$IMAGE" -u smcp)
+          gid=$(docker run --rm --entrypoint /usr/bin/id "$IMAGE" -g smcp)
+          chmod 0400 /tmp/mimi-model/*
+          sudo chown -R "$uid:$gid" /tmp/mimi-model
+      - name: Exercise real encode and decode
+        env:
+          IMAGE: smcp-mimi-runtime:${{ github.sha }}
+        run: |
+          set -euo pipefail
+          uid=$(docker run --rm --entrypoint /usr/bin/id "$IMAGE" -u smcp)
+          gid=$(docker run --rm --entrypoint /usr/bin/id "$IMAGE" -g smcp)
+          sudo install -d -o "$uid" -g "$gid" -m 0700 /tmp/mimi-io
+          docker run --rm --mount type=bind,src=/tmp/mimi-io,dst=/io \
+            --entrypoint /usr/local/bin/ffmpeg "$IMAGE" -v error -f lavfi \
+            -i sine=frequency=440:sample_rate=24000:duration=0.5 -ac 1 \
+            -c:a pcm_s16le -y /io/input.wav
+          docker run --rm \
+            --mount type=bind,src=/tmp/mimi-model,dst=/model,readonly \
+            --mount type=bind,src=/tmp/mimi-io,dst=/io \
+            --entrypoint /opt/mimi-venv/bin/python "$IMAGE" \
+            -m smcp_worker.mimi_runtime encode --weights /model/weights.bin \
+            --config /model/config.yaml --input /io/input.wav --output /io/output.mimi
+          docker run --rm \
+            --mount type=bind,src=/tmp/mimi-model,dst=/model,readonly \
+            --mount type=bind,src=/tmp/mimi-io,dst=/io \
+            --entrypoint /opt/mimi-venv/bin/python "$IMAGE" \
+            -m smcp_worker.mimi_runtime encode --weights /model/weights.bin \
+            --config /model/config.yaml --input /io/input.wav --output /io/output-again.mimi
+          docker run --rm --mount type=bind,src=/tmp/mimi-io,dst=/io \
+            --entrypoint /usr/bin/cmp "$IMAGE" /io/output.mimi /io/output-again.mimi
+          docker run --rm \
+            --mount type=bind,src=/tmp/mimi-model,dst=/model,readonly \
+            --mount type=bind,src=/tmp/mimi-io,dst=/io \
+            --entrypoint /opt/mimi-venv/bin/python "$IMAGE" \
+            -m smcp_worker.mimi_runtime decode --weights /model/weights.bin \
+            --config /model/config.yaml --input /io/output.mimi --output /io/decoded.wav
+          docker run --rm --mount type=bind,src=/tmp/mimi-io,dst=/io \
+            --entrypoint /usr/local/bin/ffprobe "$IMAGE" -v error -show_entries \
+            stream=sample_rate,channels,duration -of json /io/decoded.wav
+          docker run --rm --mount type=bind,src=/tmp/mimi-io,dst=/io \
+            --entrypoint /bin/sh "$IMAGE" -c \
+            'test "$(stat -c %s /io/output.mimi)" -lt "$(stat -c %s /io/input.wav)"'
+      - name: Scan candidate image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: smcp-mimi-runtime:${{ github.sha }}
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Generate exact-image SPDX SBOM
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: smcp-mimi-runtime:${{ github.sha }}
+          format: spdx-json
+          output: smcp-mimi-runtime-${{ github.sha }}.spdx.json
+      - name: Sign in to GHCR
+        if: github.event_name == 'workflow_dispatch'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679fa # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish scanned runtime without rebuilding
+        if: github.event_name == 'workflow_dispatch'
+        id: publish
+        env:
+          LOCAL_IMAGE: smcp-mimi-runtime:${{ github.sha }}
+          IMAGE_NAME: ghcr.io/${{ steps.registry.outputs.owner }}/smcp-mimi-runtime
+          VERSION: mimi-24khz-89091b3e466e
+        run: |
+          set -euo pipefail
+          docker tag "$LOCAL_IMAGE" "${IMAGE_NAME}:${VERSION}"
+          docker push "${IMAGE_NAME}:${VERSION}"
+          digest=$(docker image inspect --format '{{ index .RepoDigests 0 }}' "${IMAGE_NAME}:${VERSION}")
+          digest=${digest##*@}
+          [[ "$digest" == sha256:* ]]
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$digest" > mimi-runtime-digest.txt
+          printf '### Published Mimi runtime\n\n`%s@%s`\n' "$IMAGE_NAME" "$digest" >> "$GITHUB_STEP_SUMMARY"
+      - name: Attest exact runtime provenance
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ghcr.io/${{ steps.registry.outputs.owner }}/smcp-mimi-runtime
+          subject-digest: ${{ steps.publish.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+      - name: Upload runtime audit artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mimi-runtime-${{ github.sha }}
+          path: |
+            smcp-mimi-runtime-${{ github.sha }}.spdx.json
+            mimi-runtime-digest.txt
+          if-no-files-found: ${{ github.event_name == 'workflow_dispatch' && 'error' || 'warn' }}
+          retention-days: 90

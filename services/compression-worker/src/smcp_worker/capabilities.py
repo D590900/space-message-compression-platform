@@ -2,10 +2,25 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from smcp_worker.adapters.audio import OpusAudioAdapter
-from smcp_worker.adapters.image import AvifImageAdapter, JpegXlImageAdapter
+from smcp_worker.adapters.audio import (
+    EncodecAudioAdapter,
+    MimiAudioAdapter,
+    OpusAudioAdapter,
+    SnacAudioAdapter,
+)
+from smcp_worker.adapters.image import (
+    AvifImageAdapter,
+    CodLiteImageAdapter,
+    CoolChicImageAdapter,
+    JpegXlImageAdapter,
+)
 from smcp_worker.adapters.text import BrotliTextAdapter, ZstandardTextAdapter
-from smcp_worker.adapters.video import Av1VideoAdapter
+from smcp_worker.adapters.video import (
+    Av1VideoAdapter,
+    CoolChicVideoAdapter,
+    HiNervVideoAdapter,
+    LivePortraitVideoAdapter,
+)
 from smcp_worker.model_manifest import load_catalog
 from smcp_worker.models import CodecCapabilities, Profile
 
@@ -16,6 +31,30 @@ def _model_capabilities() -> tuple[CodecCapabilities, ...]:
     catalog = load_catalog(MODEL_CATALOG)
     capabilities: list[CodecCapabilities] = []
     for model in catalog.models:
+        if model.id == "cod-lite":
+            capabilities.append(CodLiteImageAdapter(manifest=model).capabilities())
+            continue
+        if model.id == "coolchic-image":
+            capabilities.append(CoolChicImageAdapter(manifest=model).capabilities())
+            continue
+        if model.id == "snac":
+            capabilities.append(SnacAudioAdapter(manifest=model).capabilities())
+            continue
+        if model.id == "mimi":
+            capabilities.append(MimiAudioAdapter(manifest=model).capabilities())
+            continue
+        if model.id == "encodec":
+            capabilities.append(EncodecAudioAdapter(manifest=model).capabilities())
+            continue
+        if model.id == "liveportrait":
+            capabilities.append(LivePortraitVideoAdapter(manifest=model).capabilities())
+            continue
+        if model.id == "coolchic-video":
+            capabilities.append(CoolChicVideoAdapter(manifest=model).capabilities())
+            continue
+        if model.id == "hinerv-video":
+            capabilities.append(HiNervVideoAdapter(manifest=model).capabilities())
+            continue
         if model.enabled:
             raise RuntimeError(
                 f"{model.codec_id} is marked enabled but no neural pipeline is registered"

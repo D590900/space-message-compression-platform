@@ -1,0 +1,6 @@
+# Mirrors hubertsiuzdak/snac@8f79a718f1ad71f94f79999f0071348227aff22e.
+# huggingface_hub is deliberately omitted: model downloads are performed only by
+# the SMCP explicit, hash-verifying fetch command.
+torch==2.6.0
+numpy
+einops
