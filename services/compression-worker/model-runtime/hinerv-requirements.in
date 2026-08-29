@@ -1,4 +1,4 @@
-accelerate==0.23.0
+accelerate==1.14.0
 pytorch-msssim==1.0.0
 timm==0.9.7
 torch==2.6.0
