@@ -1,4 +1,4 @@
 # Transformers v5.5.0 is pinned to commit c1c34249fa27deefbd4a377dfbf883a39baf5c6d.
 torch==2.6.0
 transformers==5.5.0
-safetensors==0.6.2
+safetensors==0.8.0
