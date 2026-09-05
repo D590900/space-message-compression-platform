@@ -19,9 +19,9 @@
     "openapi:lint": "pnpm --filter @smcp/schemas openapi:check && redocly lint docs/api/openapi.yaml"
   },
   "devDependencies": {
-    "@redocly/cli": "2.47.0",
+    "@redocly/cli": "2.50.0",
     "prettier": "3.9.6",
-    "turbo": "2.10.11",
+    "turbo": "2.10.12",
     "typescript": "7.0.2",
     "vitest": "4.1.11"
   }
