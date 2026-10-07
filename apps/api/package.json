@@ -25,7 +25,7 @@
     "@opentelemetry/resources": "2.10.0",
     "@opentelemetry/sdk-node": "0.221.0",
     "@smcp/schemas": "workspace:*",
-    "fastify": "5.12.1",
+    "fastify": "5.12.5",
     "ioredis": "6.0.0",
     "postgres": "3.4.9",
     "prom-client": "15.1.3",
