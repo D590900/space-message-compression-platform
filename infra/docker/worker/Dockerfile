@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.12
-FROM rust:1.98.0-slim-bookworm@sha256:94e9efa4033213dbb70d4f665527e7ece3944ddb7ba1dd2e43f6fd6e2490af58 AS capsule-build
+FROM rust:1.100.0-slim-bookworm@sha256:7c7d4eb4d05b7781187a327809466cfddf29753f6defdc3d19a0e291951b7a37 AS capsule-build
 WORKDIR /workspace
 COPY Cargo.toml Cargo.lock ./
 COPY crates crates
